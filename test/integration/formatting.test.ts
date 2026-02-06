@@ -4,7 +4,7 @@ import {
   writeTempFiles,
   getTscErrors,
   readTempFile,
-} from "../helpers.js";
+} from "../helpers.ts";
 
 describe("formatting", () => {
   it("applies fixes", () => {

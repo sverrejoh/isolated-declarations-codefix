@@ -3,8 +3,8 @@ import { readFileSync, writeFileSync, mkdirSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { createProject, fix } from "../src/index.js";
-import type { Project, FixResult } from "../src/index.js";
+import { createProject, fix } from "../src/index.ts";
+import type { Project, FixResult } from "../src/index.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

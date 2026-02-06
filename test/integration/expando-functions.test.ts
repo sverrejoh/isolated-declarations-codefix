@@ -3,7 +3,7 @@ import {
   fixFixture,
   writeTempFiles,
   getTscErrors,
-} from "../helpers.js";
+} from "../helpers.ts";
 
 describe("expando-functions", () => {
   it("applies fixes or already has no errors", () => {

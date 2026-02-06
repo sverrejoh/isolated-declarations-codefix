@@ -1,4 +1,4 @@
-import { User, Post } from "./types.js";
+import { User, Post } from "./types.ts";
 function createUser(id: number, name: string): User {
   return { id, name };
 }

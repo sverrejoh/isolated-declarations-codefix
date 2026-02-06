@@ -1,6 +1,6 @@
 import ts from "typescript";
-import { applyTextChanges } from "./changes.js";
-import type { Project } from "./project.js";
+import { applyTextChanges } from "./changes.ts";
+import type { Project } from "./project.ts";
 
 // All isolatedDeclarations error codes handled by
 // fixMissingTypeAnnotationOnExports

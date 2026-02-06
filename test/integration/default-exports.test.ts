@@ -3,7 +3,7 @@ import {
   fixFixture,
   writeTempFiles,
   getTscErrors,
-} from "../helpers.js";
+} from "../helpers.ts";
 
 describe("default-exports", () => {
   it("applies fixes", () => {

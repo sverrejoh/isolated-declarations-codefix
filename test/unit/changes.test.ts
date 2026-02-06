@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyTextChanges } from "../../src/changes.js";
+import { applyTextChanges } from "../../src/changes.ts";
 
 function makeChange(
   start: number,

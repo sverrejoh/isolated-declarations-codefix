@@ -4,12 +4,10 @@
   "description": "CLI tool to apply TypeScript isolated declarations code fixes",
   "type": "module",
   "main": "src/index.ts",
-  "bin": {
-    "isolated-declarations-codefix": "bin/cli.js"
-  },
+  "bin": "bin/cli.js",
   "scripts": {
     "build": "tsc",
-    "dev": "tsx src/cli.ts",
+    "start": "node src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -17,7 +15,7 @@
     "typescript": ">=5.5.0"
   },
   "devDependencies": {
-    "tsx": "^4.19.0",
+    "@types/node": "^22.0.0",
     "typescript": "^5.8.0",
     "vitest": "^3.0.0"
   },

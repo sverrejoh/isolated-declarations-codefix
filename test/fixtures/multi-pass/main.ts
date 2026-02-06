@@ -1,2 +1,2 @@
-import { wrap } from "./helpers.js";
+import { wrap } from "./helpers.ts";
 export const data = wrap(42);

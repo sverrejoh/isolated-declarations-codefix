@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { createProject } from "./project.js";
-import { fix } from "./fixer.js";
+import { createProject } from "./project.ts";
+import { fix } from "./fixer.ts";
 
 interface CliOptions {
   project: string;
@@ -97,4 +97,12 @@ export function main(): void {
       console.log(`  Would update: ${fileName}`);
     }
   }
+}
+
+// Run when executed directly
+const isDirectRun =
+  process.argv[1] &&
+  import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"));
+if (isDirectRun) {
+  main();
 }
