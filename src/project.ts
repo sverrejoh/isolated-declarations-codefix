@@ -76,6 +76,7 @@ export function createProject(tsconfigPath: string): Project {
     readDirectory: ts.sys.readDirectory,
     directoryExists: ts.sys.directoryExists,
     getDirectories: ts.sys.getDirectories,
+    realpath: ts.sys.realpath,
   };
 
   const languageService = ts.createLanguageService(
