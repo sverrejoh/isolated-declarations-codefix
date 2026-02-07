@@ -324,22 +324,22 @@ export function fix(
     passes++;
   }
 
-  // Rollback files where the fix introduced NEW
-  // non-isolatedDeclarations errors (e.g. duplicate
-  // imports, bad type annotations from TS bugs).
+  // Validate: check each changed file for NEW
+  // non-isolatedDeclarations errors. Try to repair
+  // (e.g. organizeImports for duplicate imports)
+  // before reverting.
   for (const fileName of [...filesChanged]) {
     const original = snapshots.get(fileName);
     if (original === undefined) continue;
 
-    const afterErrors = project.languageService
+    let errors = project.languageService
       .getSemanticDiagnostics(fileName)
       .filter(
         (d) => d.code < 9007 || d.code > 9029,
       );
-    if (afterErrors.length === 0) continue;
+    if (errors.length === 0) continue;
 
-    // Save fixed content, revert to original,
-    // count pre-existing errors, then decide.
+    // Save fixed content, check pre-existing count.
     const fixedContent =
       project.getFileContent(fileName);
     project.updateFile(fileName, original);
@@ -348,13 +348,53 @@ export function fix(
       .filter(
         (d) => d.code < 9007 || d.code > 9029,
       ).length;
+    // Restore fixed content for repair attempt.
+    project.updateFile(fileName, fixedContent);
 
-    if (afterErrors.length > beforeCount) {
-      // Fix introduced new errors — stay reverted.
+    if (errors.length <= beforeCount) continue;
+
+    // Try organizeImports to fix duplicate imports.
+    const hasDuplicates = errors.some(
+      (d) => d.code === 2300,
+    );
+    if (hasDuplicates) {
+      try {
+        const orgChanges =
+          project.languageService.organizeImports(
+            { type: "file", fileName },
+            formatOptions,
+            preferences,
+          );
+        for (const oc of orgChanges) {
+          if (oc.textChanges.length === 0) continue;
+          const cur =
+            project.getFileContent(oc.fileName);
+          project.updateFile(
+            oc.fileName,
+            applyTextChanges(
+              cur,
+              oc.textChanges,
+            ),
+          );
+        }
+        errors = project.languageService
+          .getSemanticDiagnostics(fileName)
+          .filter(
+            (d) =>
+              d.code < 9007 || d.code > 9029,
+          );
+      } catch {
+        // organizeImports failed
+      }
+    }
+
+    if (errors.length > beforeCount) {
+      // Still broken — revert.
+      project.updateFile(fileName, original);
       filesChanged.delete(fileName);
       const msg =
         "fix introduced errors: " +
-        afterErrors
+        errors
           .map((d) =>
             typeof d.messageText === "string"
               ? d.messageText
@@ -368,9 +408,6 @@ export function fix(
         fileName,
         message: msg,
       });
-    } else {
-      // Errors existed before — restore the fix.
-      project.updateFile(fileName, fixedContent);
     }
   }
 
