@@ -4,11 +4,22 @@ export function applyTextChanges(
   text: string,
   changes: readonly ts.TextChange[],
 ): string {
-  // Sort changes by start position descending (bottom-to-top)
-  // This ensures earlier positions remain valid after each edit
-  const sorted = [...changes].sort(
-    (a, b) => b.span.start - a.span.start,
+  // Sort descending by start position so earlier
+  // edits don't shift later ones. For same-position
+  // inserts, reverse the original order so that
+  // sequential application at the same offset
+  // preserves the intended sequence (the first
+  // original insert ends up first in the output).
+  const indexed = changes.map((c, i) => ({
+    c,
+    i,
+  }));
+  indexed.sort(
+    (a, b) =>
+      b.c.span.start - a.c.span.start ||
+      b.i - a.i,
   );
+  const sorted = indexed.map((x) => x.c);
 
   let result = text;
   for (const change of sorted) {
