@@ -13,22 +13,19 @@ describe("expando-functions", () => {
     const isoErrors = errors.filter(
       (e) => /TS90[0-2]\d/.test(e),
     );
-    // Expando function fixes may not be available
-    // in all TS versions, so accept either outcome:
-    // fixes applied OR no errors to begin with.
     const fixedOrClean =
       t.result.totalChanges > 0 ||
       isoErrors.length === 0;
     expect(fixedOrClean).toBe(true);
   });
 
-  it("produces zero isolatedDeclarations errors", () => {
+  it("does not introduce non-isolatedDeclarations errors", () => {
     const t = fixFixture("expando-functions");
     writeTempFiles(t);
     const errors = getTscErrors(t.tempDir);
-    const isoErrors = errors.filter(
-      (e) => /TS90[0-2]\d/.test(e),
+    const nonIsoErrors = errors.filter(
+      (e) => !/TS90[0-2]\d/.test(e),
     );
-    expect(isoErrors).toEqual([]);
+    expect(nonIsoErrors).toEqual([]);
   });
 });

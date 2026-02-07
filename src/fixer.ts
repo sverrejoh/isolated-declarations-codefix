@@ -50,6 +50,7 @@ function fixFileFallback(
   fileName: string,
   formatOptions: ts.FormatCodeSettings,
   preferences: ts.UserPreferences,
+  snapshots?: Map<string, string>,
 ): number {
   let totalEdits = 0;
   let prevCount = -1;
@@ -104,6 +105,12 @@ function fixFileFallback(
         const current = project.getFileContent(
           fc.fileName,
         );
+        if (
+          snapshots &&
+          !snapshots.has(fc.fileName)
+        ) {
+          snapshots.set(fc.fileName, current);
+        }
         const updated = applyTextChanges(
           current,
           fc.textChanges,
@@ -136,6 +143,9 @@ export function fix(
   } = options;
   const filesChanged = new Set<string>();
   const filesSkipped = new Map<string, string>();
+  // Snapshot original content before first change,
+  // so we can rollback if a fix introduces errors.
+  const snapshots = new Map<string, string>();
   let totalChanges = 0;
   let passes = 0;
 
@@ -180,6 +190,7 @@ export function fix(
             sourceFile.fileName,
             formatOptions,
             preferences,
+            snapshots,
           );
         } catch {
           // fallback also failed
@@ -239,6 +250,9 @@ export function fix(
         const current = project.getFileContent(
           fileChange.fileName,
         );
+        if (!snapshots.has(fileChange.fileName)) {
+          snapshots.set(fileChange.fileName, current);
+        }
         const newContent = applyTextChanges(
           current,
           fileChange.textChanges,
@@ -286,6 +300,7 @@ export function fix(
         sf.fileName,
         formatOptions,
         preferences,
+        snapshots,
       );
       if (edits > 0) {
         filesChanged.add(sf.fileName);
@@ -307,6 +322,56 @@ export function fix(
       filesFixed: sweepFixed,
     });
     passes++;
+  }
+
+  // Rollback files where the fix introduced NEW
+  // non-isolatedDeclarations errors (e.g. duplicate
+  // imports, bad type annotations from TS bugs).
+  for (const fileName of [...filesChanged]) {
+    const original = snapshots.get(fileName);
+    if (original === undefined) continue;
+
+    const afterErrors = project.languageService
+      .getSemanticDiagnostics(fileName)
+      .filter(
+        (d) => d.code < 9007 || d.code > 9029,
+      );
+    if (afterErrors.length === 0) continue;
+
+    // Save fixed content, revert to original,
+    // count pre-existing errors, then decide.
+    const fixedContent =
+      project.getFileContent(fileName);
+    project.updateFile(fileName, original);
+    const beforeCount = project.languageService
+      .getSemanticDiagnostics(fileName)
+      .filter(
+        (d) => d.code < 9007 || d.code > 9029,
+      ).length;
+
+    if (afterErrors.length > beforeCount) {
+      // Fix introduced new errors — stay reverted.
+      filesChanged.delete(fileName);
+      const msg =
+        "fix introduced errors: " +
+        afterErrors
+          .map((d) =>
+            typeof d.messageText === "string"
+              ? d.messageText
+              : d.messageText.messageText,
+          )
+          .slice(0, 3)
+          .join("; ");
+      filesSkipped.set(fileName, msg);
+      onProgress?.({
+        type: "file-error",
+        fileName,
+        message: msg,
+      });
+    } else {
+      // Errors existed before — restore the fix.
+      project.updateFile(fileName, fixedContent);
+    }
   }
 
   // Check for remaining isolatedDeclarations errors.
