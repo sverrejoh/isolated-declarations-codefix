@@ -2,11 +2,16 @@ import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createProject } from "./project.ts";
 import { fix } from "./fixer.ts";
+import {
+  createTtyRenderer,
+  createPlainRenderer,
+} from "./renderer.ts";
 
 interface CliOptions {
   project: string;
   dryRun: boolean;
   verbose: boolean;
+  plain: boolean;
   write: boolean;
 }
 
@@ -15,6 +20,7 @@ function parseArgs(args: string[]): CliOptions {
     project: "./tsconfig.json",
     dryRun: false,
     verbose: false,
+    plain: false,
     write: true,
   };
 
@@ -27,6 +33,8 @@ function parseArgs(args: string[]): CliOptions {
       opts.write = false;
     } else if (arg === "--verbose") {
       opts.verbose = true;
+    } else if (arg === "--plain") {
+      opts.plain = true;
     } else if (arg === "--no-write") {
       opts.write = false;
     } else if (arg === "--help" || arg === "-h") {
@@ -50,7 +58,8 @@ Options:
   -p, --project <path>  Path to tsconfig.json
                          (default: ./tsconfig.json)
   --dry-run             Show changes without writing
-  --verbose             Show detailed progress
+  --verbose             Show per-file details
+  --plain               Disable colors and progress bar
   --no-write            Don't write files to disk
   -h, --help            Show this help message
 `);
@@ -61,38 +70,69 @@ export function main(): void {
   const opts = parseArgs(args);
   const tsconfigPath = resolve(opts.project);
 
-  if (opts.verbose) {
-    console.log(`Using tsconfig: ${tsconfigPath}`);
-  }
-
   const project = createProject(tsconfigPath);
 
-  if (opts.verbose) {
-    console.log(
-      `Found ${project.getFileNames().length} source files`,
-    );
-  }
+  const isTty = process.stdout.isTTY && !opts.plain;
+  const renderer = isTty
+    ? createTtyRenderer(
+        project.getRootDir(),
+        opts.verbose,
+        tsconfigPath,
+      )
+    : createPlainRenderer(project.getRootDir());
 
-  const result = fix(project, { verbose: opts.verbose });
+  const fileNames = project.getFileNames();
+  renderer.start(fileNames.length);
 
-  if (result.totalChanges === 0) {
-    console.log("No isolated declarations fixes needed.");
-    return;
-  }
+  const startTime = Date.now();
+  const result = fix(project, {
+    onProgress: (e) => {
+      if (e.type === "file-scanned") {
+        renderer.onFileScanned(e.fileName);
+      } else if (e.type === "file") {
+        renderer.onFileFixed(e.fileName, e.edits);
+      } else if (e.type === "file-error") {
+        renderer.onFileError(e.fileName, e.message);
+      } else if (e.type === "pass-complete") {
+        renderer.onPassComplete(e.pass, e.filesFixed);
+      }
+    },
+  });
+  const elapsed = Date.now() - startTime;
 
-  console.log(
-    `Applied fixes to ${result.filesChanged.size} file(s)` +
-      ` in ${result.passes} pass(es).`,
-  );
+  renderer.finish(result, elapsed);
+
+  if (result.totalChanges === 0) return;
 
   if (opts.write && !opts.dryRun) {
     for (const fileName of result.filesChanged) {
       const content = project.getFileContent(fileName);
       writeFileSync(fileName, content, "utf-8");
     }
-    console.log("Files written to disk.");
+    const n = result.filesChanged.size;
+    if (isTty) {
+      console.log(
+        `  Wrote ${n}` +
+          ` file${n !== 1 ? "s" : ""}` +
+          ` to disk.`,
+      );
+    } else {
+      console.log(
+        `Wrote ${n}` +
+          ` file${n !== 1 ? "s" : ""}` +
+          ` to disk.`,
+      );
+    }
   } else {
-    console.log("Dry run — no files written.");
+    if (isTty) {
+      console.log(
+        "  Dry run \u2014 no files written.",
+      );
+    } else {
+      console.log(
+        "Dry run \u2014 no files written.",
+      );
+    }
     for (const fileName of result.filesChanged) {
       console.log(`  Would update: ${fileName}`);
     }
@@ -102,7 +142,9 @@ export function main(): void {
 // Run when executed directly
 const isDirectRun =
   process.argv[1] &&
-  import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"));
+  import.meta.url.endsWith(
+    process.argv[1].replace(/\\/g, "/"),
+  );
 if (isDirectRun) {
   main();
 }
