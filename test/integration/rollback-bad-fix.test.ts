@@ -15,7 +15,7 @@ describe("rollback bad fix", () => {
     // are expected to remain if unfixable). Any
     // other error was introduced by our tool.
     const nonIsoErrors = errors.filter(
-      (e) => !/TS90[0-2]\d/.test(e),
+      (e) => !/TS90(?:[0-2]\d|3[5-9])/.test(e),
     );
     expect(nonIsoErrors).toEqual([]);
   });
@@ -35,7 +35,8 @@ describe("rollback bad fix", () => {
         .getSemanticDiagnostics(inputFile)
         .filter(
           (d) =>
-            d.code < 9007 || d.code > 9029,
+            (d.code < 9007 || d.code > 9025) &&
+            (d.code < 9035 || d.code > 9039),
         );
       expect(diags.length).toBe(0);
     }

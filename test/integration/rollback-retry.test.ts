@@ -11,11 +11,12 @@ import { createProject, fix } from "../../src/index.ts";
 import { FIXTURES_DIR, getTscErrors } from "../helpers.ts";
 
 /**
- * Set up a project from the return-types fixture and
- * monkey-patch getCombinedCodeFix to always throw,
- * simulating the TypeScript "Changes overlap" bug.
+ * When getCombinedCodeFix throws "Changes overlap",
+ * the fixer falls back to per-diagnostic fixing.
+ * This tests that the per-diagnostic retry on rollback
+ * preserves individual working fixes.
  */
-function setupWithOverlapError() {
+function setup() {
   const fixtureDir = resolve(
     FIXTURES_DIR,
     "return-types",
@@ -37,35 +38,36 @@ function setupWithOverlapError() {
   );
   const project = createProject(tsconfigPath);
 
-  // Force getCombinedCodeFix to throw for every call,
-  // as if every file triggers the TS overlap bug.
+  // Force getCombinedCodeFix to throw, triggering
+  // the fallback path.
   project.languageService.getCombinedCodeFix = () => {
     throw new Error(
-      "Debug Failure. False expression: " +
-        "Changes overlap",
+      "Debug Failure. Changes overlap",
     );
   };
 
   return { project, tempDir };
 }
 
-describe("overlapping changes fallback", () => {
-  it("fixes files via per-diagnostic fallback", () => {
-    const { project } = setupWithOverlapError();
+describe("rollback retry via per-diagnostic", () => {
+  it("falls back to per-diagnostic and fixes", () => {
+    const { project } = setup();
     const result = fix(project);
 
-    expect(result.filesChanged.size).toBeGreaterThan(0);
+    expect(
+      result.filesChanged.size,
+    ).toBeGreaterThan(0);
     expect(result.filesSkipped.size).toBe(0);
   });
 
   it("produces zero isolatedDeclarations errors", () => {
-    const { project, tempDir } = setupWithOverlapError();
+    const { project, tempDir } = setup();
     const result = fix(project);
 
-    for (const fileName of result.filesChanged) {
+    for (const fn of result.filesChanged) {
       writeFileSync(
-        fileName,
-        project.getFileContent(fileName),
+        fn,
+        project.getFileContent(fn),
         "utf-8",
       );
     }
@@ -75,5 +77,24 @@ describe("overlapping changes fallback", () => {
       /TS90(?:[0-2]\d|3[5-9])/.test(e),
     );
     expect(isoErrors).toEqual([]);
+  });
+
+  it("does not introduce non-iso errors", () => {
+    const { project, tempDir } = setup();
+    const result = fix(project);
+
+    for (const fn of result.filesChanged) {
+      writeFileSync(
+        fn,
+        project.getFileContent(fn),
+        "utf-8",
+      );
+    }
+
+    const errors = getTscErrors(tempDir);
+    const nonIsoErrors = errors.filter(
+      (e) => !/TS90(?:[0-2]\d|3[5-9])/.test(e),
+    );
+    expect(nonIsoErrors).toEqual([]);
   });
 });

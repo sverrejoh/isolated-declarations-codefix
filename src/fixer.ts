@@ -4,6 +4,34 @@ import type { Project } from "./project.ts";
 
 const FIX_ID = "fixMissingTypeAnnotationOnExports";
 
+function isIsolatedDeclarationsError(
+  code: number,
+): boolean {
+  return (
+    (code >= 9007 && code <= 9025) ||
+    (code >= 9035 && code <= 9039)
+  );
+}
+
+function findEnumMemberAt(
+  sourceFile: ts.SourceFile,
+  pos: number,
+): ts.EnumMember | undefined {
+  function visit(
+    node: ts.Node,
+  ): ts.EnumMember | undefined {
+    if (
+      ts.isEnumMember(node) &&
+      node.getStart(sourceFile) <= pos &&
+      node.getEnd() > pos
+    ) {
+      return node;
+    }
+    return ts.forEachChild(node, visit);
+  }
+  return visit(sourceFile);
+}
+
 export interface FixResult {
   totalChanges: number;
   filesChanged: Set<string>;
@@ -60,8 +88,7 @@ function fixFileFallback(
       .getSemanticDiagnostics(fileName)
       .filter(
         (d) =>
-          d.code >= 9007 &&
-          d.code <= 9029 &&
+          isIsolatedDeclarationsError(d.code) &&
           d.start !== undefined,
       );
 
@@ -324,6 +351,107 @@ export function fix(
     passes++;
   }
 
+  // TS9020: enum member initializers that reference
+  // external symbols. TypeScript provides no fix for
+  // this — we inline the constant value ourselves.
+  const programEnum =
+    project.languageService.getProgram();
+  if (programEnum) {
+    const checker = programEnum.getTypeChecker();
+    for (const sf of programEnum.getSourceFiles()) {
+      if (sf.fileName.includes("node_modules"))
+        continue;
+      if (sf.isDeclarationFile) continue;
+
+      const diags = project.languageService
+        .getSemanticDiagnostics(sf.fileName)
+        .filter(
+          (d) =>
+            d.code === 9020 &&
+            d.start !== undefined,
+        );
+      if (diags.length === 0) continue;
+
+      let content =
+        project.getFileContent(sf.fileName);
+      if (!snapshots.has(sf.fileName)) {
+        snapshots.set(sf.fileName, content);
+      }
+      // Build a fresh source file to walk AST.
+      let src = ts.createSourceFile(
+        sf.fileName,
+        content,
+        ts.ScriptTarget.Latest,
+        true,
+      );
+
+      let enumFixed = 0;
+      // Process diagnostics in reverse order so
+      // replacing text doesn't shift later positions.
+      const sorted = [...diags].sort(
+        (a, b) => b.start! - a.start!,
+      );
+      for (const d of sorted) {
+        const pos = d.start!;
+        const node = findEnumMemberAt(src, pos);
+        if (!node) continue;
+
+        // Re-bind to the program's source file to
+        // use the checker.
+        const progSf = programEnum.getSourceFile(
+          sf.fileName,
+        );
+        if (!progSf) continue;
+        const member = findEnumMemberAt(
+          progSf,
+          pos,
+        );
+        if (!member) continue;
+
+        const val = checker.getConstantValue(
+          member as ts.EnumMember,
+        );
+        if (val === undefined) continue;
+
+        const init = (
+          member as ts.EnumMember
+        ).initializer;
+        if (!init) continue;
+
+        const replacement =
+          typeof val === "string"
+            ? JSON.stringify(val)
+            : String(val);
+
+        content =
+          content.slice(0, init.getStart(progSf)) +
+          replacement +
+          content.slice(init.getEnd());
+        enumFixed++;
+
+        // Re-create AST after text change.
+        src = ts.createSourceFile(
+          sf.fileName,
+          content,
+          ts.ScriptTarget.Latest,
+          true,
+        );
+      }
+
+      if (enumFixed > 0) {
+        project.updateFile(sf.fileName, content);
+        filesChanged.add(sf.fileName);
+        filesSkipped.delete(sf.fileName);
+        totalChanges += enumFixed;
+        onProgress?.({
+          type: "file",
+          fileName: sf.fileName,
+          edits: enumFixed,
+        });
+      }
+    }
+  }
+
   // Validate: check each changed file for NEW
   // non-isolatedDeclarations errors. Try to repair
   // (e.g. organizeImports for duplicate imports)
@@ -335,7 +463,7 @@ export function fix(
     let errors = project.languageService
       .getSemanticDiagnostics(fileName)
       .filter(
-        (d) => d.code < 9007 || d.code > 9029,
+        (d) => !isIsolatedDeclarationsError(d.code),
       );
     if (errors.length === 0) continue;
 
@@ -346,18 +474,24 @@ export function fix(
     const beforeCount = project.languageService
       .getSemanticDiagnostics(fileName)
       .filter(
-        (d) => d.code < 9007 || d.code > 9029,
+        (d) => !isIsolatedDeclarationsError(d.code),
       ).length;
     // Restore fixed content for repair attempt.
     project.updateFile(fileName, fixedContent);
 
     if (errors.length <= beforeCount) continue;
 
-    // Try organizeImports to fix duplicate imports.
-    const hasDuplicates = errors.some(
-      (d) => d.code === 2300,
+    // Try organizeImports to fix import corruption.
+    // TS2300: Duplicate identifier
+    // TS2440: Import declaration conflicts
+    // TS2395: Merged declaration conflict
+    const hasImportIssues = errors.some(
+      (d) =>
+        d.code === 2300 ||
+        d.code === 2440 ||
+        d.code === 2395,
     );
-    if (hasDuplicates) {
+    if (hasImportIssues) {
       try {
         const orgChanges =
           project.languageService.organizeImports(
@@ -381,33 +515,124 @@ export function fix(
           .getSemanticDiagnostics(fileName)
           .filter(
             (d) =>
-              d.code < 9007 || d.code > 9029,
+              !isIsolatedDeclarationsError(d.code),
           );
       } catch {
         // organizeImports failed
       }
     }
 
+    // Try to fix bare Promise annotations (TS2314).
+    // TypeScript's fixer sometimes generates `Promise`
+    // without a type argument for async functions.
+    // Replace with `Promise<void>` — if the function
+    // actually returns a value, validation will still
+    // revert due to type mismatch.
+    const hasBarePromise = errors.some(
+      (d) =>
+        d.code === 2314 &&
+        typeof d.messageText === "string" &&
+        d.messageText.includes("Promise"),
+    );
+    if (hasBarePromise) {
+      try {
+        const content =
+          project.getFileContent(fileName);
+        const patched = content.replace(
+          /(?<=:\s*)Promise\b(?!\s*<)/g,
+          "Promise<void>",
+        );
+        if (patched !== content) {
+          project.updateFile(fileName, patched);
+          errors = project.languageService
+            .getSemanticDiagnostics(fileName)
+            .filter(
+              (d) =>
+                !isIsolatedDeclarationsError(
+                  d.code,
+                ),
+            );
+        }
+      } catch {
+        // repair failed
+      }
+    }
+
     if (errors.length > beforeCount) {
-      // Still broken — revert.
+      // Combined fix broke the file — revert and
+      // retry with per-diagnostic approach which
+      // applies fixes one at a time, skipping the
+      // ones that cause errors.
       project.updateFile(fileName, original);
       filesChanged.delete(fileName);
-      const msg =
-        "fix introduced errors: " +
-        errors
-          .map((d) =>
-            typeof d.messageText === "string"
-              ? d.messageText
-              : d.messageText.messageText,
-          )
-          .slice(0, 3)
-          .join("; ");
-      filesSkipped.set(fileName, msg);
-      onProgress?.({
-        type: "file-error",
-        fileName,
-        message: msg,
-      });
+
+      let retryEdits = 0;
+      try {
+        retryEdits = fixFileFallback(
+          project,
+          fileName,
+          formatOptions,
+          preferences,
+          snapshots,
+        );
+      } catch {
+        // per-diagnostic retry also failed
+      }
+
+      if (retryEdits > 0) {
+        // Validate the per-diagnostic result.
+        const retryErrors = project.languageService
+          .getSemanticDiagnostics(fileName)
+          .filter(
+            (d) =>
+              !isIsolatedDeclarationsError(d.code),
+          );
+        if (retryErrors.length <= beforeCount) {
+          filesChanged.add(fileName);
+          filesSkipped.delete(fileName);
+          onProgress?.({
+            type: "file",
+            fileName,
+            edits: retryEdits,
+          });
+        } else {
+          // Per-diagnostic also broke — revert.
+          project.updateFile(fileName, original);
+          const msg =
+            "fix introduced errors: " +
+            retryErrors
+              .map((d) =>
+                typeof d.messageText === "string"
+                  ? d.messageText
+                  : d.messageText.messageText,
+              )
+              .slice(0, 3)
+              .join("; ");
+          filesSkipped.set(fileName, msg);
+          onProgress?.({
+            type: "file-error",
+            fileName,
+            message: msg,
+          });
+        }
+      } else {
+        const msg =
+          "fix introduced errors: " +
+          errors
+            .map((d) =>
+              typeof d.messageText === "string"
+                ? d.messageText
+                : d.messageText.messageText,
+            )
+            .slice(0, 3)
+            .join("; ");
+        filesSkipped.set(fileName, msg);
+        onProgress?.({
+          type: "file-error",
+          fileName,
+          message: msg,
+        });
+      }
     }
   }
 
@@ -424,7 +649,7 @@ export function fix(
       const count = project.languageService
         .getSemanticDiagnostics(sf.fileName)
         .filter(
-          (d) => d.code >= 9007 && d.code <= 9029,
+          (d) => isIsolatedDeclarationsError(d.code),
         ).length;
       if (count > 0) {
         remainingErrors.set(sf.fileName, count);

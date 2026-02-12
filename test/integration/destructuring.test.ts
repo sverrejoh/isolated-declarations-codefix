@@ -24,7 +24,7 @@ describe("destructuring", () => {
     writeTempFiles(t);
     const errors = getTscErrors(t.tempDir);
     const nonIsoErrors = errors.filter(
-      (e) => !/TS90[0-2]\d/.test(e),
+      (e) => !/TS90(?:[0-2]\d|3[5-9])/.test(e),
     );
     expect(nonIsoErrors).toEqual([]);
   });

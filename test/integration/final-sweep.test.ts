@@ -84,7 +84,7 @@ describe("final sweep", () => {
 
     const errors = getTscErrors(tempDir);
     const isoErrors = errors.filter((e) =>
-      /TS90[0-2]\d/.test(e),
+      /TS90(?:[0-2]\d|3[5-9])/.test(e),
     );
     expect(isoErrors).toEqual([]);
   });
