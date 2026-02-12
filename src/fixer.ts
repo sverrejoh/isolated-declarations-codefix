@@ -159,6 +159,130 @@ function fixFileFallback(
   return totalEdits;
 }
 
+/**
+ * Like fixFileFallback but validates each fix
+ * individually. If a fix increases non-iso errors,
+ * it's reverted and skipped. This preserves good
+ * fixes even when some fixes produce side effects.
+ *
+ * Returns the total number of text edits applied.
+ */
+function fixFileValidated(
+  project: Project,
+  fileName: string,
+  formatOptions: ts.FormatCodeSettings,
+  preferences: ts.UserPreferences,
+  snapshots?: Map<string, string>,
+): number {
+  let totalEdits = 0;
+  let prevCount = -1;
+
+  const nonIsoErrorCount = (): number =>
+    project.languageService
+      .getSemanticDiagnostics(fileName)
+      .filter(
+        (d) =>
+          !isIsolatedDeclarationsError(d.code),
+      ).length;
+
+  for (let round = 0; round < 50; round++) {
+    const diags = project.languageService
+      .getSemanticDiagnostics(fileName)
+      .filter(
+        (d) =>
+          isIsolatedDeclarationsError(d.code) &&
+          d.start !== undefined,
+      );
+
+    if (diags.length === 0) break;
+    if (diags.length === prevCount) break;
+    prevCount = diags.length;
+
+    let fixedAny = false;
+    for (const d of diags) {
+      const start = d.start!;
+      const end = start + (d.length ?? 0);
+
+      let fixes: readonly ts.CodeFixAction[];
+      try {
+        fixes =
+          project.languageService.getCodeFixesAtPosition(
+            fileName,
+            start,
+            end,
+            [d.code],
+            formatOptions,
+            preferences,
+          );
+      } catch {
+        continue;
+      }
+
+      const action =
+        fixes.find((f) => f.fixId === FIX_ID) ??
+        fixes[0];
+      if (
+        !action ||
+        action.changes.length === 0
+      ) {
+        continue;
+      }
+
+      // Save state before applying this fix.
+      const saved = new Map<string, string>();
+      for (const fc of action.changes) {
+        saved.set(
+          fc.fileName,
+          project.getFileContent(fc.fileName),
+        );
+      }
+      const errorsBefore = nonIsoErrorCount();
+
+      let applied = false;
+      let editsThisFix = 0;
+      for (const fc of action.changes) {
+        if (fc.textChanges.length === 0) continue;
+        const current = project.getFileContent(
+          fc.fileName,
+        );
+        if (
+          snapshots &&
+          !snapshots.has(fc.fileName)
+        ) {
+          snapshots.set(fc.fileName, current);
+        }
+        const updated = applyTextChanges(
+          current,
+          fc.textChanges,
+        );
+        project.updateFile(fc.fileName, updated);
+        editsThisFix += fc.textChanges.length;
+        applied = true;
+      }
+
+      if (!applied) continue;
+
+      // Validate: did this fix introduce errors?
+      const errorsAfter = nonIsoErrorCount();
+      if (errorsAfter > errorsBefore) {
+        // Revert just this fix.
+        for (const [fn, content] of saved) {
+          project.updateFile(fn, content);
+        }
+        continue;
+      }
+
+      totalEdits += editsThisFix;
+      fixedAny = true;
+      break; // re-fetch diags, positions shifted
+    }
+
+    if (!fixedAny) break;
+  }
+
+  return totalEdits;
+}
+
 export function fix(
   project: Project,
   options: FixOptions = {},
@@ -408,9 +532,26 @@ export function fix(
         );
         if (!member) continue;
 
-        const val = checker.getConstantValue(
+        let val = checker.getConstantValue(
           member as ts.EnumMember,
         );
+        // Fallback: use type literal detection
+        // when getConstantValue can't resolve
+        // (e.g. cross-module const references).
+        if (val === undefined) {
+          const init2 = (
+            member as ts.EnumMember
+          ).initializer;
+          if (init2) {
+            const t =
+              checker.getTypeAtLocation(init2);
+            if (t.isStringLiteral()) {
+              val = t.value;
+            } else if (t.isNumberLiteral()) {
+              val = t.value;
+            }
+          }
+        }
         if (val === undefined) continue;
 
         const init = (
@@ -560,15 +701,15 @@ export function fix(
 
     if (errors.length > beforeCount) {
       // Combined fix broke the file — revert and
-      // retry with per-diagnostic approach which
-      // applies fixes one at a time, skipping the
-      // ones that cause errors.
+      // retry with validated per-diagnostic approach
+      // that checks each fix individually, skipping
+      // any that introduce errors.
       project.updateFile(fileName, original);
       filesChanged.delete(fileName);
 
       let retryEdits = 0;
       try {
-        retryEdits = fixFileFallback(
+        retryEdits = fixFileValidated(
           project,
           fileName,
           formatOptions,
@@ -576,45 +717,17 @@ export function fix(
           snapshots,
         );
       } catch {
-        // per-diagnostic retry also failed
+        // validated retry also failed
       }
 
       if (retryEdits > 0) {
-        // Validate the per-diagnostic result.
-        const retryErrors = project.languageService
-          .getSemanticDiagnostics(fileName)
-          .filter(
-            (d) =>
-              !isIsolatedDeclarationsError(d.code),
-          );
-        if (retryErrors.length <= beforeCount) {
-          filesChanged.add(fileName);
-          filesSkipped.delete(fileName);
-          onProgress?.({
-            type: "file",
-            fileName,
-            edits: retryEdits,
-          });
-        } else {
-          // Per-diagnostic also broke — revert.
-          project.updateFile(fileName, original);
-          const msg =
-            "fix introduced errors: " +
-            retryErrors
-              .map((d) =>
-                typeof d.messageText === "string"
-                  ? d.messageText
-                  : d.messageText.messageText,
-              )
-              .slice(0, 3)
-              .join("; ");
-          filesSkipped.set(fileName, msg);
-          onProgress?.({
-            type: "file-error",
-            fileName,
-            message: msg,
-          });
-        }
+        filesChanged.add(fileName);
+        filesSkipped.delete(fileName);
+        onProgress?.({
+          type: "file",
+          fileName,
+          edits: retryEdits,
+        });
       } else {
         const msg =
           "fix introduced errors: " +

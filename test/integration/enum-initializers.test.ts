@@ -14,7 +14,7 @@ describe("enum-initializers", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("inlines constant values", () => {
+  it("inlines same-file constant values", () => {
     const t = fixFixture("enum-initializers");
     const inputFile = [...t.result.filesChanged].find(
       (f) => f.endsWith("input.ts"),
@@ -29,6 +29,22 @@ describe("enum-initializers", () => {
     expect(content).not.toContain("= HUB");
     expect(content).not.toContain("= TEAMS");
     expect(content).not.toContain("= NUM_VAL");
+  });
+
+  it("inlines cross-module constant values", () => {
+    const t = fixFixture("enum-initializers");
+    const inputFile = [...t.result.filesChanged].find(
+      (f) => f.endsWith("input.ts"),
+    );
+    expect(inputFile).toBeDefined();
+    const content =
+      t.project.getFileContent(inputFile!);
+    // Cross-module constants should be inlined
+    // via the type literal fallback.
+    expect(content).toContain('"remote-hub"');
+    expect(content).toContain("9090");
+    expect(content).not.toContain("= REMOTE_HUB");
+    expect(content).not.toContain("= REMOTE_PORT");
   });
 
   it("produces zero isolatedDeclarations errors", () => {
