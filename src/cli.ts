@@ -13,6 +13,7 @@ interface CliOptions {
   verbose: boolean;
   plain: boolean;
   write: boolean;
+  rewriteInlineImports: boolean;
 }
 
 function parseArgs(args: string[]): CliOptions {
@@ -22,6 +23,7 @@ function parseArgs(args: string[]): CliOptions {
     verbose: false,
     plain: false,
     write: true,
+    rewriteInlineImports: true,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -37,6 +39,10 @@ function parseArgs(args: string[]): CliOptions {
       opts.plain = true;
     } else if (arg === "--no-write") {
       opts.write = false;
+    } else if (
+      arg === "--no-rewrite-inline-imports"
+    ) {
+      opts.rewriteInlineImports = false;
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -61,6 +67,8 @@ Options:
   --verbose             Show per-file details
   --plain               Disable colors and progress bar
   --no-write            Don't write files to disk
+  --no-rewrite-inline-imports
+                        Keep typeof import() as-is
   -h, --help            Show this help message
 `);
 }
@@ -86,6 +94,7 @@ export function main(): void {
 
   const startTime = Date.now();
   const result = fix(project, {
+    rewriteInlineImports: opts.rewriteInlineImports,
     onProgress: (e) => {
       if (e.type === "file-scanned") {
         renderer.onFileScanned(e.fileName);
@@ -93,6 +102,11 @@ export function main(): void {
         renderer.onFileFixed(e.fileName, e.edits);
       } else if (e.type === "file-error") {
         renderer.onFileError(e.fileName, e.message);
+      } else if (e.type === "file-warning") {
+        renderer.onFileError(
+          e.fileName,
+          e.message,
+        );
       } else if (e.type === "pass-complete") {
         renderer.onPassComplete(e.pass, e.filesFixed);
       }

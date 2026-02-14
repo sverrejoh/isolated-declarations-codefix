@@ -53,6 +53,11 @@ export type ProgressEvent =
       message: string;
     }
   | {
+      type: "file-warning";
+      fileName: string;
+      message: string;
+    }
+  | {
       type: "pass-complete";
       pass: number;
       filesFixed: number;
@@ -61,6 +66,7 @@ export type ProgressEvent =
 export interface FixOptions {
   maxPasses?: number;
   verbose?: boolean;
+  rewriteInlineImports?: boolean;
   onProgress?: (event: ProgressEvent) => void;
 }
 
@@ -283,6 +289,251 @@ function fixFileValidated(
   return totalEdits;
 }
 
+function moduleSpecifierToAlias(
+  specifier: string,
+): string {
+  // Strip directory path
+  let name = specifier.split("/").pop() ?? specifier;
+  // Strip npm scope prefix if bare specifier
+  if (specifier.startsWith("@")) {
+    const parts = specifier.split("/");
+    name = parts[parts.length - 1] ?? name;
+  }
+  // Strip file extension
+  name = name.replace(/\.\w+$/, "");
+  // PascalCase: split on non-alphanum, capitalize
+  const pascal = name
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean)
+    .map((s) => s[0].toUpperCase() + s.slice(1))
+    .join("");
+  return pascal + "Module";
+}
+
+function collectIdentifiers(
+  node: ts.Node,
+  ids: Set<string>,
+): void {
+  if (ts.isIdentifier(node)) {
+    ids.add(node.text);
+  }
+  ts.forEachChild(node, (child) =>
+    collectIdentifiers(child, ids),
+  );
+}
+
+export function rewriteInlineImportTypes(
+  content: string,
+  fileName: string,
+  original?: string,
+  onProgress?: (event: ProgressEvent) => void,
+): string {
+  const src = ts.createSourceFile(
+    fileName,
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+
+  // Collect all ImportTypeNode with isTypeOf,
+  // skipping nodes inside TypeLiterals (object types)
+  // where replacing typeof import() with typeof X
+  // can break declaration checking for modules with
+  // default exports.
+  const nodes: ts.ImportTypeNode[] = [];
+  function isInsideTypeLiteral(
+    node: ts.Node,
+  ): boolean {
+    let cur = node.parent;
+    while (cur) {
+      if (ts.isTypeLiteralNode(cur)) return true;
+      cur = cur.parent;
+    }
+    return false;
+  }
+  function visit(node: ts.Node): void {
+    if (
+      ts.isImportTypeNode(node) &&
+      node.isTypeOf &&
+      !isInsideTypeLiteral(node)
+    ) {
+      nodes.push(node);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(src);
+
+  if (nodes.length === 0) return content;
+
+  // Group by specifier
+  const bySpec = new Map<
+    string,
+    ts.ImportTypeNode[]
+  >();
+  for (const node of nodes) {
+    if (!ts.isLiteralTypeNode(node.argument)) {
+      continue;
+    }
+    const lit = node.argument.literal;
+    if (!ts.isStringLiteral(lit)) continue;
+    const spec = lit.text;
+    let arr = bySpec.get(spec);
+    if (!arr) {
+      arr = [];
+      bySpec.set(spec, arr);
+    }
+    arr.push(node);
+  }
+
+  if (bySpec.size === 0) return content;
+
+  // Check for existing namespace imports to reuse
+  const existingNs = new Map<string, string>();
+  for (const stmt of src.statements) {
+    if (
+      ts.isImportDeclaration(stmt) &&
+      stmt.moduleSpecifier &&
+      ts.isStringLiteral(stmt.moduleSpecifier) &&
+      stmt.importClause?.namedBindings &&
+      ts.isNamespaceImport(
+        stmt.importClause.namedBindings,
+      )
+    ) {
+      existingNs.set(
+        stmt.moduleSpecifier.text,
+        stmt.importClause.namedBindings.name.text,
+      );
+    }
+  }
+
+  // Collect all identifiers for conflict check
+  const allIds = new Set<string>();
+  collectIdentifiers(src, allIds);
+
+  // Assign aliases
+  const aliasMap = new Map<string, string>();
+  for (const spec of bySpec.keys()) {
+    const existing = existingNs.get(spec);
+    if (existing) {
+      aliasMap.set(spec, existing);
+      continue;
+    }
+    let base = moduleSpecifierToAlias(spec);
+    let alias = base;
+    let counter = 2;
+    while (allIds.has(alias)) {
+      alias = base.replace(/Module$/, "") +
+        "Module" + counter;
+      counter++;
+    }
+    aliasMap.set(spec, alias);
+    allIds.add(alias);
+  }
+
+  // Warn about pre-existing inline imports
+  if (original && onProgress) {
+    for (const [spec, nodeList] of bySpec) {
+      for (const node of nodeList) {
+        const nodeText = node.getText(src);
+        if (original.includes(nodeText)) {
+          onProgress({
+            type: "file-warning",
+            fileName,
+            message:
+              "pre-existing typeof import() " +
+              "rewritten: " +
+              nodeText,
+          });
+        }
+      }
+    }
+  }
+
+  // Build replacement list sorted by descending pos
+  const replacements: {
+    start: number;
+    end: number;
+    text: string;
+  }[] = [];
+  for (const [spec, nodeList] of bySpec) {
+    const alias = aliasMap.get(spec)!;
+    for (const node of nodeList) {
+      let replacement = "typeof " + alias;
+      if (node.qualifier) {
+        replacement +=
+          "." + node.qualifier.getText(src);
+      }
+      if (
+        node.typeArguments &&
+        node.typeArguments.length > 0
+      ) {
+        const args = node.typeArguments
+          .map((a) => a.getText(src))
+          .join(", ");
+        replacement += "<" + args + ">";
+      }
+      replacements.push({
+        start: node.getStart(src),
+        end: node.getEnd(),
+        text: replacement,
+      });
+    }
+  }
+  replacements.sort((a, b) => b.start - a.start);
+
+  // Apply replacements in reverse order
+  let result = content;
+  for (const r of replacements) {
+    result =
+      result.slice(0, r.start) +
+      r.text +
+      result.slice(r.end);
+  }
+
+  // Insert new import statements for new aliases
+  const newImports: string[] = [];
+  for (const [spec, alias] of aliasMap) {
+    if (existingNs.has(spec)) continue;
+    newImports.push(
+      `import type * as ${alias} from "${spec}";`,
+    );
+  }
+
+  if (newImports.length > 0) {
+    // Find position after last import statement
+    const resultSrc = ts.createSourceFile(
+      fileName,
+      result,
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    let insertPos = 0;
+    for (const stmt of resultSrc.statements) {
+      if (
+        ts.isImportDeclaration(stmt) ||
+        ts.isImportEqualsDeclaration(stmt)
+      ) {
+        insertPos = stmt.getEnd();
+      } else {
+        break;
+      }
+    }
+
+    const importBlock =
+      "\n" + newImports.join("\n");
+    if (insertPos > 0) {
+      result =
+        result.slice(0, insertPos) +
+        importBlock +
+        result.slice(insertPos);
+    } else {
+      result = newImports.join("\n") + "\n" + result;
+    }
+  }
+
+  return result;
+}
+
 export function fix(
   project: Project,
   options: FixOptions = {},
@@ -290,6 +541,7 @@ export function fix(
   const {
     maxPasses = 5,
     verbose = false,
+    rewriteInlineImports = true,
     onProgress,
   } = options;
   const filesChanged = new Set<string>();
@@ -745,6 +997,38 @@ export function fix(
           fileName,
           message: msg,
         });
+      }
+    }
+  }
+
+  // Rewrite typeof import() to namespace imports.
+  // Process ALL source files, not just changed ones,
+  // to also rewrite pre-existing typeof import().
+  if (rewriteInlineImports) {
+    const programRewrite =
+      project.languageService.getProgram();
+    if (programRewrite) {
+      for (const sf of programRewrite
+        .getSourceFiles()) {
+        if (sf.fileName.includes("node_modules"))
+          continue;
+        if (sf.isDeclarationFile) continue;
+        const content =
+          project.getFileContent(sf.fileName);
+        const orig = snapshots.get(sf.fileName);
+        const rewritten = rewriteInlineImportTypes(
+          content,
+          sf.fileName,
+          orig,
+          onProgress,
+        );
+        if (rewritten !== content) {
+          project.updateFile(
+            sf.fileName,
+            rewritten,
+          );
+          filesChanged.add(sf.fileName);
+        }
       }
     }
   }

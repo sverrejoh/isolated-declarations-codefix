@@ -22,7 +22,10 @@ export interface TestResult {
  */
 export function fixFixture(
   fixtureName: string,
-  options?: { verbose?: boolean },
+  options?: {
+    verbose?: boolean;
+    rewriteInlineImports?: boolean;
+  },
 ): TestResult {
   const fixtureDir = resolve(FIXTURES_DIR, fixtureName);
   const tempDir = resolve(
@@ -44,6 +47,8 @@ export function fixFixture(
   const project = createProject(tsconfigPath);
   const result = fix(project, {
     verbose: options?.verbose ?? false,
+    rewriteInlineImports:
+      options?.rewriteInlineImports,
   });
 
   return { project, result, tempDir };
