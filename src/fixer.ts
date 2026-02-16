@@ -1,6 +1,11 @@
 import ts from "typescript";
 import { applyTextChanges } from "./changes.ts";
-import { analyzeExtractions, applyExtractions } from "./extract-types.ts";
+import {
+  analyzeExtractionsWithMetadata,
+  planCrossFileExtractions,
+  applyCrossFileExtractions,
+} from "./extract-types.ts";
+import type { FileAnalysis } from "./extract-types.ts";
 import type { Project } from "./project.ts";
 
 const FIX_ID = "fixMissingTypeAnnotationOnExports";
@@ -847,20 +852,33 @@ export function fix(
     }
   }
 
-  // Extract verbose inline types to named interfaces.
+  // Extract verbose inline types to named interfaces (cross-file dedup).
   const threshold = options.extractThreshold ?? 5;
+  const fileAnalyses = new Map<string, FileAnalysis>();
   for (const fileName of [...filesChanged]) {
     const content = project.getFileContent(fileName);
-    const extraction = analyzeExtractions(
+    const analysis = analyzeExtractionsWithMetadata(
       content,
       fileName,
       threshold,
     );
-    if (extraction.extractions.length > 0) {
-      project.updateFile(
+    if (analysis.extractions.length > 0) {
+      fileAnalyses.set(fileName, analysis);
+    }
+  }
+
+  if (fileAnalyses.size > 0) {
+    const plan = planCrossFileExtractions(fileAnalyses);
+    for (const [fileName, action] of plan.actions) {
+      const content = project.getFileContent(fileName);
+      const updated = applyCrossFileExtractions(
+        content,
         fileName,
-        applyExtractions(content, extraction),
+        action,
       );
+      if (updated !== content) {
+        project.updateFile(fileName, updated);
+      }
     }
   }
 
