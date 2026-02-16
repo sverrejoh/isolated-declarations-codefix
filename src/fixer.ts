@@ -1,5 +1,6 @@
 import ts from "typescript";
 import { applyTextChanges } from "./changes.ts";
+import { analyzeExtractions, applyExtractions } from "./extract-types.ts";
 import type { Project } from "./project.ts";
 
 const FIX_ID = "fixMissingTypeAnnotationOnExports";
@@ -67,6 +68,7 @@ export interface FixOptions {
   maxPasses?: number;
   verbose?: boolean;
   rewriteInlineImports?: boolean;
+  extractThreshold?: number;
   onProgress?: (event: ProgressEvent) => void;
 }
 
@@ -842,6 +844,23 @@ export function fix(
           edits: enumFixed,
         });
       }
+    }
+  }
+
+  // Extract verbose inline types to named interfaces.
+  const threshold = options.extractThreshold ?? 5;
+  for (const fileName of [...filesChanged]) {
+    const content = project.getFileContent(fileName);
+    const extraction = analyzeExtractions(
+      content,
+      fileName,
+      threshold,
+    );
+    if (extraction.extractions.length > 0) {
+      project.updateFile(
+        fileName,
+        applyExtractions(content, extraction),
+      );
     }
   }
 

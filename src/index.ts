@@ -11,6 +11,14 @@ export {
   applyFileTextChanges,
 } from "./changes.ts";
 export {
+  analyzeExtractions,
+  applyExtractions,
+} from "./extract-types.ts";
+export type {
+  Extraction,
+  ExtractionResult,
+} from "./extract-types.ts";
+export {
   createTtyRenderer,
   createPlainRenderer,
 } from "./renderer.ts";

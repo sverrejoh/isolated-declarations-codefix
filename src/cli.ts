@@ -14,6 +14,7 @@ interface CliOptions {
   plain: boolean;
   write: boolean;
   rewriteInlineImports: boolean;
+  extractThreshold: number;
 }
 
 function parseArgs(args: string[]): CliOptions {
@@ -24,6 +25,7 @@ function parseArgs(args: string[]): CliOptions {
     plain: false,
     write: true,
     rewriteInlineImports: true,
+    extractThreshold: 5,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -43,6 +45,8 @@ function parseArgs(args: string[]): CliOptions {
       arg === "--no-rewrite-inline-imports"
     ) {
       opts.rewriteInlineImports = false;
+    } else if (arg === "--extract-threshold") {
+      opts.extractThreshold = parseInt(args[++i], 10);
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -69,6 +73,9 @@ Options:
   --no-write            Don't write files to disk
   --no-rewrite-inline-imports
                         Keep typeof import() as-is
+  --extract-threshold <n>
+                         Extract inline types with more than
+                         n members to interfaces (default: 5)
   -h, --help            Show this help message
 `);
 }
@@ -95,6 +102,7 @@ export function main(): void {
   const startTime = Date.now();
   const result = fix(project, {
     rewriteInlineImports: opts.rewriteInlineImports,
+    extractThreshold: opts.extractThreshold,
     onProgress: (e) => {
       if (e.type === "file-scanned") {
         renderer.onFileScanned(e.fileName);
