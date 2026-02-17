@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createProject, fix } from "../src/index.ts";
-import type { Project, FixResult } from "../src/index.ts";
+import type { Project, FixResult, FixOptions } from "../src/index.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -25,6 +25,7 @@ export function fixFixture(
   options?: {
     verbose?: boolean;
     rewriteInlineImports?: boolean;
+    extractThreshold?: number;
   },
 ): TestResult {
   const fixtureDir = resolve(FIXTURES_DIR, fixtureName);
@@ -45,11 +46,15 @@ export function fixFixture(
 
   const tsconfigPath = resolve(tempDir, "tsconfig.json");
   const project = createProject(tsconfigPath);
-  const result = fix(project, {
+  const fixOptions: FixOptions = {
     verbose: options?.verbose ?? false,
     rewriteInlineImports:
       options?.rewriteInlineImports,
-  });
+  };
+  if (options?.extractThreshold !== undefined) {
+    fixOptions.extractThreshold = options.extractThreshold;
+  }
+  const result = fix(project, fixOptions);
 
   return { project, result, tempDir };
 }
