@@ -1070,6 +1070,136 @@ export function fix(
     }
   }
 
+  // Simplify expanded type annotations: when TS expands a generic
+  // return type (e.g. PresenceComponent<DrawerMotionParams>) into its
+  // full structural form, replace with the concise alias + call type args.
+  // Runs AFTER all passes, extract, validate, and rewrite steps.
+  {
+    const prog = project.languageService.getProgram();
+    if (prog) {
+      const chk = prog.getTypeChecker();
+      for (const fileName of [...filesChanged]) {
+        const sf = prog.getSourceFile(fileName);
+        if (!sf) continue;
+
+        type Repl = { start: number; end: number; text: string; aliasName: string; moduleName: string | undefined };
+        const repls: Repl[] = [];
+
+        ts.forEachChild(sf, (node) => {
+          if (!ts.isVariableStatement(node)) return;
+          if (!node.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) return;
+          for (const decl of node.declarationList.declarations) {
+            if (!ts.isIdentifier(decl.name) || !decl.type || !decl.initializer) continue;
+            if (!ts.isCallExpression(decl.initializer) || !decl.initializer.typeArguments?.length) continue;
+
+            const type = chk.getTypeAtLocation(decl.initializer);
+            const aliasSymbol = (type as any).aliasSymbol as ts.Symbol | undefined;
+            if (!aliasSymbol) continue;
+
+            const aliasName = aliasSymbol.name;
+            const typeArgTexts = decl.initializer.typeArguments.map(ta => ta.getText(sf));
+            const simplified = typeArgTexts.length > 0
+              ? `${aliasName}<${typeArgTexts.join(", ")}>`
+              : aliasName;
+            const currentAnnotation = decl.type.getText(sf);
+            if (currentAnnotation.length <= simplified.length) continue;
+
+            let moduleName: string | undefined;
+            const aliasDecls = aliasSymbol.getDeclarations();
+            if (aliasDecls?.length) {
+              const aliasFile = aliasDecls[0].getSourceFile().fileName;
+              if (aliasFile.includes("node_modules")) {
+                const nmIdx = aliasFile.lastIndexOf("node_modules/");
+                if (nmIdx >= 0) {
+                  let pkg = aliasFile.slice(nmIdx + "node_modules/".length);
+                  if (pkg.startsWith("@")) {
+                    const parts = pkg.split("/");
+                    pkg = parts[0] + "/" + parts[1];
+                  } else {
+                    pkg = pkg.split("/")[0];
+                  }
+                  const afterPkg = aliasFile.slice(nmIdx + "node_modules/".length + pkg.length);
+                  const subpath = afterPkg.replace(/^\/(?:dist|lib|src)\//, "/").replace(/\.d\.ts$/, "").replace(/\/index$/, "");
+                  moduleName = subpath === "" || subpath === "/" ? pkg : pkg + subpath;
+                }
+              }
+            }
+
+            repls.push({ start: decl.type.getStart(sf), end: decl.type.getEnd(), text: simplified, aliasName, moduleName });
+          }
+        });
+
+        if (repls.length === 0) continue;
+
+        let content = project.getFileContent(fileName);
+        repls.sort((a, b) => b.start - a.start);
+        for (const r of repls) {
+          content = content.slice(0, r.start) + r.text + content.slice(r.end);
+        }
+
+        // Add missing imports for the alias type
+        const updatedSrc = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+        const importedNames = new Set<string>();
+        for (const stmt of updatedSrc.statements) {
+          if (!ts.isImportDeclaration(stmt) || !stmt.importClause?.namedBindings) continue;
+          if (ts.isNamedImports(stmt.importClause.namedBindings)) {
+            for (const el of stmt.importClause.namedBindings.elements) {
+              importedNames.add(el.name.text);
+            }
+          }
+        }
+
+        for (const r of repls) {
+          if (importedNames.has(r.aliasName) || !r.moduleName) continue;
+          let inserted = false;
+          const src2 = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+          for (const stmt of src2.statements) {
+            if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+            if (stmt.moduleSpecifier.text === r.moduleName && stmt.importClause?.namedBindings && ts.isNamedImports(stmt.importClause.namedBindings)) {
+              const lastEl = stmt.importClause.namedBindings.elements[stmt.importClause.namedBindings.elements.length - 1];
+              const pos = lastEl.getEnd();
+              content = content.slice(0, pos) + `, type ${r.aliasName}` + content.slice(pos);
+              inserted = true;
+              importedNames.add(r.aliasName);
+              break;
+            }
+          }
+          if (!inserted) {
+            let insertPos = 0;
+            for (const stmt of src2.statements) {
+              if (ts.isImportDeclaration(stmt) || ts.isImportEqualsDeclaration(stmt)) insertPos = stmt.getEnd();
+              else break;
+            }
+            content = content.slice(0, insertPos) + `\nimport type { ${r.aliasName} } from "${r.moduleName}";` + content.slice(insertPos);
+            importedNames.add(r.aliasName);
+          }
+        }
+
+        project.updateFile(fileName, content);
+
+        // Clean up unused imports left over from the expanded type
+        try {
+          const orgChanges =
+            project.languageService.organizeImports(
+              { type: "file", fileName },
+              formatOptions,
+              preferences,
+            );
+          for (const oc of orgChanges) {
+            if (oc.textChanges.length === 0) continue;
+            const cur = project.getFileContent(oc.fileName);
+            project.updateFile(
+              oc.fileName,
+              applyTextChanges(cur, oc.textChanges),
+            );
+          }
+        } catch {
+          // organizeImports failed
+        }
+      }
+    }
+  }
+
   // Check for remaining isolatedDeclarations errors.
   const remainingErrors = new Map<string, number>();
   const programCheck =
