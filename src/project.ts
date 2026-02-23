@@ -1,6 +1,6 @@
-import ts from "typescript";
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import ts from "typescript";
 
 export interface Project {
   languageService: ts.LanguageService;
@@ -14,30 +14,24 @@ export function createProject(tsconfigPath: string): Project {
   const resolvedPath = resolve(tsconfigPath);
   const rootDir = dirname(resolvedPath);
 
-  const configFile = ts.readConfigFile(
-    resolvedPath,
-    (p) => readFileSync(p, "utf-8"),
+  const configFile = ts.readConfigFile(resolvedPath, (p) =>
+    readFileSync(p, "utf-8")
   );
   if (configFile.error) {
     throw new Error(
       `Failed to read ${resolvedPath}: ` +
-        ts.flattenDiagnosticMessageText(
-          configFile.error.messageText,
-          "\n",
-        ),
+        ts.flattenDiagnosticMessageText(configFile.error.messageText, "\n")
     );
   }
 
   const parsed = ts.parseJsonConfigFileContent(
     configFile.config,
     ts.sys,
-    rootDir,
+    rootDir
   );
   if (parsed.errors.length > 0) {
     const msgs = parsed.errors
-      .map((e) =>
-        ts.flattenDiagnosticMessageText(e.messageText, "\n"),
-      )
+      .map((e) => ts.flattenDiagnosticMessageText(e.messageText, "\n"))
       .join("\n");
     throw new Error(`Config errors in ${resolvedPath}:\n${msgs}`);
   }
@@ -68,8 +62,7 @@ export function createProject(tsconfigPath: string): Project {
     },
     getCurrentDirectory: () => rootDir,
     getCompilationSettings: () => parsed.options,
-    getDefaultLibFileName: (options) =>
-      ts.getDefaultLibFilePath(options),
+    getDefaultLibFileName: (options) => ts.getDefaultLibFilePath(options),
     fileExists: (fileName) =>
       fileContents.has(fileName) || ts.sys.fileExists(fileName),
     readFile: (fileName) => getFileContent(fileName),
@@ -81,7 +74,7 @@ export function createProject(tsconfigPath: string): Project {
 
   const languageService = ts.createLanguageService(
     host,
-    ts.createDocumentRegistry(),
+    ts.createDocumentRegistry()
   );
 
   function updateFile(fileName: string, content: string): void {

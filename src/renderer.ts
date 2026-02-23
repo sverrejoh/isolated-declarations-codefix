@@ -20,9 +20,16 @@ const icon = {
 const FIX_ID = "fixMissingTypeAnnotationOnExports";
 
 const frames = [
-  "\u28cb", "\u2819", "\u2839", "\u2838",
-  "\u283c", "\u2834", "\u2826", "\u2827",
-  "\u2807", "\u280f",
+  "\u28cb",
+  "\u2819",
+  "\u2839",
+  "\u2838",
+  "\u283c",
+  "\u2834",
+  "\u2826",
+  "\u2827",
+  "\u2807",
+  "\u280f",
 ];
 
 export interface Renderer {
@@ -37,11 +44,10 @@ export interface Renderer {
 export function createTtyRenderer(
   rootDir: string,
   verbose: boolean,
-  tsconfigPath?: string,
+  tsconfigPath?: string
 ): Renderer {
   let total = 0;
   let scanned = 0;
-  let currentPass = 1;
   let spinIdx = 0;
   let lastFile = "";
   let linesUp = 0;
@@ -72,19 +78,15 @@ export function createTtyRenderer(
     erase();
     const pct = total > 0 ? scanned / total : 0;
     const filled = Math.round(pct * barW);
-    const bar =
-      "\u2501".repeat(filled) +
-      "\u2500".repeat(barW - filled);
+    const bar = "\u2501".repeat(filled) + "\u2500".repeat(barW - filled);
     const cols = process.stdout.columns || 80;
     const maxPath = cols - 6;
     const f = frames[spinIdx % frames.length];
-    const file = lastFile
-      ? trunc(lastFile, maxPath)
-      : "";
+    const file = lastFile ? trunc(lastFile, maxPath) : "";
     process.stdout.write(
       `  ${c.cyan}${bar}${c.reset}` +
         ` ${c.dim}${scanned}/${total}${c.reset}\n` +
-        `  ${c.dim}${f} ${file}${c.reset}`,
+        `  ${c.dim}${f} ${file}${c.reset}`
     );
     linesUp = 2;
   }
@@ -99,18 +101,16 @@ export function createTtyRenderer(
     start(totalFiles: number): void {
       total = totalFiles;
       scanned = 0;
-      const cfg = tsconfigPath
-        ? rel(tsconfigPath)
-        : "tsconfig.json";
+      const cfg = tsconfigPath ? rel(tsconfigPath) : "tsconfig.json";
       console.log(
         `  ${c.cyan}${icon.ts}${c.reset}` +
           ` ${c.bold}isolated-declarations` +
-          `-codefix${c.reset}`,
+          `-codefix${c.reset}`
       );
       console.log(
         `  ${c.dim}${cfg}` +
           ` \u00b7 ${total} files` +
-          ` \u00b7 ${FIX_ID}${c.reset}`,
+          ` \u00b7 ${FIX_ID}${c.reset}`
       );
       console.log();
       draw();
@@ -123,98 +123,73 @@ export function createTtyRenderer(
       draw();
     },
 
-    onFileFixed(
-      fileName: string,
-      edits: number,
-    ): void {
+    onFileFixed(fileName: string, edits: number): void {
       const n = rel(fileName);
       fixed.push({ name: n, edits });
       if (verbose) {
-        const label =
-          edits === 1 ? "edit" : "edits";
+        const label = edits === 1 ? "edit" : "edits";
         above(
           `  ${c.green}${icon.check}${c.reset}` +
             ` ${c.dim}${n}${c.reset}` +
             `  ${c.cyan}${edits}${c.reset}` +
-            ` ${label}`,
+            ` ${label}`
         );
       }
     },
 
-    onFileError(
-      fileName: string,
-      message: string,
-    ): void {
-      const short = message.includes(
-        "Changes overlap",
-      )
+    onFileError(fileName: string, message: string): void {
+      const short = message.includes("Changes overlap")
         ? "overlapping changes (TS bug)"
         : message.slice(0, 60);
       above(
         `  ${c.yellow}${icon.warn}${c.reset}` +
           ` ${c.dim}${rel(fileName)}${c.reset}` +
-          `  ${c.yellow}${short}${c.reset}`,
+          `  ${c.yellow}${short}${c.reset}`
       );
     },
 
-    onPassComplete(
-      pass: number,
-      filesFixed: number,
-    ): void {
+    onPassComplete(pass: number, filesFixed: number): void {
       erase();
       console.log(
         `  ${c.green}${icon.dot}${c.reset}` +
           ` pass ${pass}` +
           ` \u00b7 ${c.cyan}${filesFixed}` +
-          `${c.reset} fixed`,
+          `${c.reset} fixed`
       );
 
       if (!verbose && fixed.length > 0) {
         const show = fixed.slice(0, 5);
         const rest = fixed.length - show.length;
         for (const f of show) {
-          const label =
-            f.edits === 1 ? "edit" : "edits";
+          const label = f.edits === 1 ? "edit" : "edits";
           console.log(
             `    ${c.green}${icon.check}` +
               `${c.reset}` +
               ` ${c.dim}${f.name}${c.reset}` +
               `  ${c.cyan}${f.edits}${c.reset}` +
-              ` ${label}`,
+              ` ${label}`
           );
         }
         if (rest > 0) {
-          console.log(
-            `    ${c.dim}\u2026 ${rest} more` +
-              `${c.reset}`,
-          );
+          console.log(`    ${c.dim}\u2026 ${rest} more` + `${c.reset}`);
         }
       }
 
       fixed = [];
       scanned = 0;
-      currentPass = pass + 1;
     },
 
-    finish(
-      result: FixResult,
-      elapsed: number,
-    ): void {
+    finish(result: FixResult, elapsed: number): void {
       const secs = (elapsed / 1000).toFixed(1);
       const ns = result.filesSkipped.size;
       const nr = result.remainingErrors.size;
-      const totalRemaining = [...result.remainingErrors
-        .values()].reduce((a, b) => a + b, 0);
+      const totalRemaining = [...result.remainingErrors.values()].reduce(
+        (a, b) => a + b,
+        0
+      );
       console.log();
-      if (
-        result.totalChanges === 0 &&
-        ns === 0 &&
-        nr === 0
-      ) {
-        console.log(
-          `  ${c.green}${icon.check}${c.reset}` +
-            ` no fixes needed`,
-        );
+      if (result.totalChanges === 0 && ns === 0 && nr === 0) {
+        console.log(`  ${c.green}${icon.check}${c.reset}` + ` no fixes needed`);
       } else {
         const nf = result.filesChanged.size;
         const np = result.passes;
@@ -226,9 +201,7 @@ export function createTtyRenderer(
           ` \u00b7 ${c.cyan}${np}${c.reset}` +
           ` pass${np !== 1 ? "es" : ""}`;
         if (ns > 0) {
-          line +=
-            ` \u00b7 ${c.yellow}${ns}` +
-            `${c.reset} skipped`;
+          line += ` \u00b7 ${c.yellow}${ns}` + `${c.reset} skipped`;
         }
         console.log(line);
       }
@@ -243,11 +216,9 @@ export function createTtyRenderer(
             ` ${c.yellow}${nr}${c.reset}` +
             ` file${nr !== 1 ? "s" : ""}` +
             ` ${c.dim}(no auto-fix available)` +
-            `${c.reset}`,
+            `${c.reset}`
         );
-        const entries = [
-          ...result.remainingErrors.entries(),
-        ];
+        const entries = [...result.remainingErrors.entries()];
         const show = entries.slice(0, 5);
         const rest = entries.length - show.length;
         for (const [f, n] of show) {
@@ -255,23 +226,18 @@ export function createTtyRenderer(
             `    ${c.yellow}${icon.warn}` +
               `${c.reset}` +
               ` ${c.dim}${rel(f)}${c.reset}` +
-              `  ${c.yellow}${n}${c.reset}`,
+              `  ${c.yellow}${n}${c.reset}`
           );
         }
         if (rest > 0) {
-          console.log(
-            `    ${c.dim}\u2026 ${rest} more` +
-              `${c.reset}`,
-          );
+          console.log(`    ${c.dim}\u2026 ${rest} more` + `${c.reset}`);
         }
       }
     },
   };
 }
 
-export function createPlainRenderer(
-  rootDir: string,
-): Renderer {
+export function createPlainRenderer(rootDir: string): Renderer {
   let currentPass = 1;
 
   function rel(p: string): string {
@@ -283,29 +249,18 @@ export function createPlainRenderer(
 
     onFileScanned(): void {},
 
-    onFileFixed(
-      fileName: string,
-      edits: number,
-    ): void {
+    onFileFixed(fileName: string, edits: number): void {
       const label = edits === 1 ? "edit" : "edits";
       console.log(
-        `Pass ${currentPass}: ${rel(fileName)}` +
-          ` (${edits} ${label})`,
+        `Pass ${currentPass}: ${rel(fileName)}` + ` (${edits} ${label})`
       );
     },
 
-    onFileError(
-      fileName: string,
-      message: string,
-    ): void {
-      const short = message.includes(
-        "Changes overlap",
-      )
+    onFileError(fileName: string, message: string): void {
+      const short = message.includes("Changes overlap")
         ? "overlapping changes (TS bug)"
         : message.slice(0, 60);
-      console.log(
-        `SKIP ${rel(fileName)}: ${short}`,
-      );
+      console.log(`SKIP ${rel(fileName)}: ${short}`);
     },
 
     onPassComplete(pass: number): void {
@@ -314,17 +269,12 @@ export function createPlainRenderer(
 
     finish(result: FixResult): void {
       const ns = result.filesSkipped.size;
-      const totalRemaining = [...result
-        .remainingErrors.values()]
-        .reduce((a, b) => a + b, 0);
-      if (
-        result.totalChanges === 0 &&
-        ns === 0 &&
-        totalRemaining === 0
-      ) {
-        console.log(
-          "No isolated declarations fixes needed.",
-        );
+      const totalRemaining = [...result.remainingErrors.values()].reduce(
+        (a, b) => a + b,
+        0
+      );
+      if (result.totalChanges === 0 && ns === 0 && totalRemaining === 0) {
+        console.log("No isolated declarations fixes needed.");
       } else {
         const nf = result.filesChanged.size;
         const np = result.passes;
@@ -344,10 +294,9 @@ export function createPlainRenderer(
           `${totalRemaining} errors remaining` +
             ` in ${nr}` +
             ` file${nr !== 1 ? "s" : ""}` +
-            ` (no auto-fix available):`,
+            ` (no auto-fix available):`
         );
-        for (const [f, n] of result
-          .remainingErrors) {
+        for (const [f, n] of result.remainingErrors) {
           console.log(`  ${rel(f)}: ${n}`);
         }
       }

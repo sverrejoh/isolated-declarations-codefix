@@ -8,7 +8,9 @@ function helper(): { x: number; y: string } {
 }
 export const complex = helper();
 export const tmpl = `value: ${42}`;
-export const arr = [1, 2, 3].map(x => x * 2);
+export const arr = [1, 2, 3].map((x) => x * 2);
 export const conditional = true ? 1 : "no";
-class MyClass { value = 1; }
+class MyClass {
+  value = 1;
+}
 export const instance = new MyClass();

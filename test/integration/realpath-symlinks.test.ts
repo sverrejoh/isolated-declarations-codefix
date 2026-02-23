@@ -1,13 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { resolve } from "node:path";
-import {
-  mkdirSync,
-  writeFileSync,
-  symlinkSync,
-  rmSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
 import { createProject, fix } from "../../src/index.ts";
 
 /**
@@ -35,20 +30,14 @@ import { createProject, fix } from "../../src/index.ts";
  * node_modules/pkg-a/) can pkg-b be found as a sibling.
  */
 function createSymlinkFixture(): string {
-  const tempDir = resolve(
-    tmpdir(),
-    "iso-decl-realpath-" + randomUUID(),
-  );
+  const tempDir = resolve(tmpdir(), "iso-decl-realpath-" + randomUUID());
 
   // .store/pkg-b@1.0/node_modules/pkg-b/
-  const pkgBReal = resolve(
-    tempDir,
-    ".store/pkg-b@1.0/node_modules/pkg-b",
-  );
+  const pkgBReal = resolve(tempDir, ".store/pkg-b@1.0/node_modules/pkg-b");
   mkdirSync(pkgBReal, { recursive: true });
   writeFileSync(
     resolve(pkgBReal, "package.json"),
-    JSON.stringify({ name: "pkg-b", types: "./index.d.ts" }),
+    JSON.stringify({ name: "pkg-b", types: "./index.d.ts" })
   );
   writeFileSync(
     resolve(pkgBReal, "index.d.ts"),
@@ -61,35 +50,26 @@ function createSymlinkFixture(): string {
       "  input: Record<string, string>,",
       "): StyleResult;",
       "",
-    ].join("\n"),
+    ].join("\n")
   );
 
   // .store/pkg-a@1.0/node_modules/pkg-a/
-  const pkgAReal = resolve(
-    tempDir,
-    ".store/pkg-a@1.0/node_modules/pkg-a",
-  );
+  const pkgAReal = resolve(tempDir, ".store/pkg-a@1.0/node_modules/pkg-a");
   mkdirSync(pkgAReal, { recursive: true });
   writeFileSync(
     resolve(pkgAReal, "package.json"),
-    JSON.stringify({ name: "pkg-a", types: "./index.d.ts" }),
+    JSON.stringify({ name: "pkg-a", types: "./index.d.ts" })
   );
   writeFileSync(
     resolve(pkgAReal, "index.d.ts"),
-    [
-      'export { makeStyle, StyleResult } from "pkg-b";',
-      "",
-    ].join("\n"),
+    ['export { makeStyle, StyleResult } from "pkg-b";', ""].join("\n")
   );
 
   // .store/pkg-a@1.0/node_modules/pkg-b -> symlink
   // to .store/pkg-b@1.0/node_modules/pkg-b
   symlinkSync(
     pkgBReal,
-    resolve(
-      tempDir,
-      ".store/pkg-a@1.0/node_modules/pkg-b",
-    ),
+    resolve(tempDir, ".store/pkg-a@1.0/node_modules/pkg-b")
   );
 
   // project/node_modules/pkg-a -> symlink to
@@ -97,10 +77,7 @@ function createSymlinkFixture(): string {
   mkdirSync(resolve(tempDir, "node_modules"), {
     recursive: true,
   });
-  symlinkSync(
-    pkgAReal,
-    resolve(tempDir, "node_modules/pkg-a"),
-  );
+  symlinkSync(pkgAReal, resolve(tempDir, "node_modules/pkg-a"));
 
   // tsconfig.json — use Node10 resolution which matches
   // the real-world 1JS config where this bug manifests
@@ -118,7 +95,7 @@ function createSymlinkFixture(): string {
         skipLibCheck: true,
       },
       include: ["./*.ts"],
-    }),
+    })
   );
 
   // input.ts
@@ -132,7 +109,7 @@ function createSymlinkFixture(): string {
       '  header: "header-class",',
       "});",
       "",
-    ].join("\n"),
+    ].join("\n")
   );
 
   return tempDir;
@@ -142,17 +119,13 @@ describe("realpath symlink resolution", () => {
   it("resolves types through pnpm-style symlinks", () => {
     const tempDir = createSymlinkFixture();
     try {
-      const project = createProject(
-        resolve(tempDir, "tsconfig.json"),
-      );
+      const project = createProject(resolve(tempDir, "tsconfig.json"));
       const result = fix(project);
 
       expect(result.totalChanges).toBeGreaterThan(0);
 
       // The key assertion: the type must NOT be "any"
-      const content = project.getFileContent(
-        resolve(tempDir, "input.ts"),
-      );
+      const content = project.getFileContent(resolve(tempDir, "input.ts"));
       expect(content).not.toContain(": any");
       expect(content).toContain("StyleResult");
     } finally {
@@ -163,23 +136,16 @@ describe("realpath symlink resolution", () => {
   it("produces zero errors after fix", () => {
     const tempDir = createSymlinkFixture();
     try {
-      const project = createProject(
-        resolve(tempDir, "tsconfig.json"),
-      );
+      const project = createProject(resolve(tempDir, "tsconfig.json"));
       fix(project);
 
       // Write fixed files
       for (const fileName of project.getFileNames()) {
-        writeFileSync(
-          fileName,
-          project.getFileContent(fileName),
-        );
+        writeFileSync(fileName, project.getFileContent(fileName));
       }
 
       // Re-check with a fresh project
-      const check = createProject(
-        resolve(tempDir, "tsconfig.json"),
-      );
+      const check = createProject(resolve(tempDir, "tsconfig.json"));
       const program = check.languageService.getProgram()!;
       const errors: string[] = [];
       for (const sf of program.getSourceFiles()) {

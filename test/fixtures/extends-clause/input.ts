@@ -1,7 +1,9 @@
 function mixin<T extends new (...a: any[]) => any>(ctor: T): T {
   return ctor;
 }
-class Base { x = 1; }
+class Base {
+  x = 1;
+}
 
 export class Extended extends mixin(Base) {
   y = 2;

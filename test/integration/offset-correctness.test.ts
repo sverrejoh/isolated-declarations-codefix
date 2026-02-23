@@ -1,9 +1,5 @@
-import { describe, it, expect } from "vitest";
-import {
-  fixFixture,
-  writeTempFiles,
-  getTscErrors,
-} from "../helpers.ts";
+import { describe, expect, it } from "vitest";
+import { fixFixture, getTscErrors, writeTempFiles } from "../helpers.ts";
 
 describe("offset-correctness", () => {
   it("applies many fixes in a single file", () => {
@@ -16,9 +12,7 @@ describe("offset-correctness", () => {
     const t = fixFixture("offset-stress");
     writeTempFiles(t);
     const errors = getTscErrors(t.tempDir);
-    const isoErrors = errors.filter(
-      (e) => /TS90(?:[0-2]\d|3[5-9])/.test(e),
-    );
+    const isoErrors = errors.filter((e) => /TS90(?:[0-2]\d|3[5-9])/.test(e));
     expect(isoErrors).toEqual([]);
   });
 });

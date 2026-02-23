@@ -1,11 +1,8 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { createProject } from "./project.ts";
 import { fix } from "./fixer.ts";
-import {
-  createTtyRenderer,
-  createPlainRenderer,
-} from "./renderer.ts";
+import { createProject } from "./project.ts";
+import { createPlainRenderer, createTtyRenderer } from "./renderer.ts";
 
 interface CliOptions {
   project: string;
@@ -41,9 +38,7 @@ function parseArgs(args: string[]): CliOptions {
       opts.plain = true;
     } else if (arg === "--no-write") {
       opts.write = false;
-    } else if (
-      arg === "--no-rewrite-inline-imports"
-    ) {
+    } else if (arg === "--no-rewrite-inline-imports") {
       opts.rewriteInlineImports = false;
     } else if (arg === "--extract-threshold") {
       opts.extractThreshold = parseInt(args[++i], 10);
@@ -74,8 +69,8 @@ Options:
   --no-rewrite-inline-imports
                         Keep typeof import() as-is
   --extract-threshold <n>
-                         Extract inline types with more than
-                         n members to interfaces (default: 5)
+                        Extract inline types with more than
+                        n members to interfaces (default: 5)
   -h, --help            Show this help message
 `);
 }
@@ -89,11 +84,7 @@ export function main(): void {
 
   const isTty = process.stdout.isTTY && !opts.plain;
   const renderer = isTty
-    ? createTtyRenderer(
-        project.getRootDir(),
-        opts.verbose,
-        tsconfigPath,
-      )
+    ? createTtyRenderer(project.getRootDir(), opts.verbose, tsconfigPath)
     : createPlainRenderer(project.getRootDir());
 
   const fileNames = project.getFileNames();
@@ -111,10 +102,7 @@ export function main(): void {
       } else if (e.type === "file-error") {
         renderer.onFileError(e.fileName, e.message);
       } else if (e.type === "file-warning") {
-        renderer.onFileError(
-          e.fileName,
-          e.message,
-        );
+        renderer.onFileError(e.fileName, e.message);
       } else if (e.type === "pass-complete") {
         renderer.onPassComplete(e.pass, e.filesFixed);
       }
@@ -133,27 +121,15 @@ export function main(): void {
     }
     const n = result.filesChanged.size;
     if (isTty) {
-      console.log(
-        `  Wrote ${n}` +
-          ` file${n !== 1 ? "s" : ""}` +
-          ` to disk.`,
-      );
+      console.log(`  Wrote ${n}` + ` file${n !== 1 ? "s" : ""}` + ` to disk.`);
     } else {
-      console.log(
-        `Wrote ${n}` +
-          ` file${n !== 1 ? "s" : ""}` +
-          ` to disk.`,
-      );
+      console.log(`Wrote ${n}` + ` file${n !== 1 ? "s" : ""}` + ` to disk.`);
     }
   } else {
     if (isTty) {
-      console.log(
-        "  Dry run \u2014 no files written.",
-      );
+      console.log("  Dry run \u2014 no files written.");
     } else {
-      console.log(
-        "Dry run \u2014 no files written.",
-      );
+      console.log("Dry run \u2014 no files written.");
     }
     for (const fileName of result.filesChanged) {
       console.log(`  Would update: ${fileName}`);
@@ -164,9 +140,7 @@ export function main(): void {
 // Run when executed directly
 const isDirectRun =
   process.argv[1] &&
-  import.meta.url.endsWith(
-    process.argv[1].replace(/\\/g, "/"),
-  );
+  import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"));
 if (isDirectRun) {
   main();
 }

@@ -1,9 +1,5 @@
-import { describe, it, expect } from "vitest";
-import {
-  fixFixture,
-  writeTempFiles,
-  getTscErrors,
-} from "../helpers.ts";
+import { describe, expect, it } from "vitest";
+import { fixFixture, getTscErrors, writeTempFiles } from "../helpers.ts";
 
 describe("multi-file", () => {
   it("applies fixes to multiple files", () => {
@@ -14,8 +10,8 @@ describe("multi-file", () => {
 
   it("does not change types.ts", () => {
     const t = fixFixture("multi-file");
-    const changedNames = [...t.result.filesChanged].map(
-      (f) => f.replace(/.*[/\\]/, ""),
+    const changedNames = [...t.result.filesChanged].map((f) =>
+      f.replace(/.*[/\\]/, "")
     );
     expect(changedNames).not.toContain("types.ts");
   });
@@ -24,9 +20,7 @@ describe("multi-file", () => {
     const t = fixFixture("multi-file");
     writeTempFiles(t);
     const errors = getTscErrors(t.tempDir);
-    const isoErrors = errors.filter(
-      (e) => /TS90(?:[0-2]\d|3[5-9])/.test(e),
-    );
+    const isoErrors = errors.filter((e) => /TS90(?:[0-2]\d|3[5-9])/.test(e));
     expect(isoErrors).toEqual([]);
   });
 });

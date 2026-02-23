@@ -1,9 +1,7 @@
-// Dynamic import — should not be modified
-export function loadInternal() {
-  return import("./internal.ts");
-}
+// Dynamic import — TS must use typeof import()
+export const loadModule = () => import("./internal.ts");
 
-// typeof import() inside TypeLiteral — rewriter should skip
-export type LazyModule = {
-  internal: typeof import("./internal.ts");
-};
+// Re-export from dynamic import
+export function getLazyConfig() {
+  return import("./internal.ts").then((m) => m.createConfig("lazy", 9999));
+}

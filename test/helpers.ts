@@ -1,10 +1,10 @@
-import { resolve, dirname } from "node:path";
-import { readFileSync, writeFileSync, mkdirSync, cpSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { FixResult, Project } from "../src/index.ts";
 import { createProject, fix } from "../src/index.ts";
-import type { Project, FixResult, FixOptions } from "../src/index.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -26,13 +26,10 @@ export function fixFixture(
     verbose?: boolean;
     rewriteInlineImports?: boolean;
     extractThreshold?: number;
-  },
+  }
 ): TestResult {
   const fixtureDir = resolve(FIXTURES_DIR, fixtureName);
-  const tempDir = resolve(
-    tmpdir(),
-    "iso-decl-test-" + randomUUID(),
-  );
+  const tempDir = resolve(tmpdir(), "iso-decl-test-" + randomUUID());
   mkdirSync(tempDir, { recursive: true });
 
   // Copy fixture to temp dir
@@ -41,20 +38,16 @@ export function fixFixture(
   // Also copy the base tsconfig if the fixture references it
   cpSync(
     resolve(FIXTURES_DIR, "tsconfig.base.json"),
-    resolve(tempDir, "tsconfig.base.json"),
+    resolve(tempDir, "tsconfig.base.json")
   );
 
   const tsconfigPath = resolve(tempDir, "tsconfig.json");
   const project = createProject(tsconfigPath);
-  const fixOptions: FixOptions = {
+  const result = fix(project, {
     verbose: options?.verbose ?? false,
-    rewriteInlineImports:
-      options?.rewriteInlineImports,
-  };
-  if (options?.extractThreshold !== undefined) {
-    fixOptions.extractThreshold = options.extractThreshold;
-  }
-  const result = fix(project, fixOptions);
+    rewriteInlineImports: options?.rewriteInlineImports,
+    extractThreshold: options?.extractThreshold,
+  });
 
   return { project, result, tempDir };
 }
@@ -62,10 +55,7 @@ export function fixFixture(
 /**
  * Read a file from the temp project directory.
  */
-export function readTempFile(
-  tempDir: string,
-  fileName: string,
-): string {
+export function readTempFile(tempDir: string, fileName: string): string {
   return readFileSync(resolve(tempDir, fileName), "utf-8");
 }
 

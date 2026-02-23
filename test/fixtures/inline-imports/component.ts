@@ -1,9 +1,10 @@
 export interface ComponentProps {
-  name: string;
+  title: string;
+  onClick?: () => void;
 }
 
-export function createComponent(
-  props: ComponentProps,
-): ComponentProps {
-  return props;
+export function Component(props: ComponentProps): string {
+  return props.title;
 }
+
+export default Component;

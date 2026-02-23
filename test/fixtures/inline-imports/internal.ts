@@ -3,8 +3,18 @@ export interface Config {
   port: number;
 }
 
-export function createConfig(): Config {
-  return { host: "localhost", port: 3000 };
+export interface Logger {
+  log(msg: string): void;
+  error(msg: string): void;
 }
 
-export const VERSION: string = "1.0.0";
+export function createConfig(host: string, port: number): Config {
+  return { host, port };
+}
+
+export function createLogger(): Logger {
+  return {
+    log: (msg: string) => console.log(msg),
+    error: (msg: string) => console.error(msg),
+  };
+}

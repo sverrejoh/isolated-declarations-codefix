@@ -1,4 +1,6 @@
-export function handler() { return "ok"; }
+export function handler() {
+  return "ok";
+}
 handler.version = 1;
 
 export function router() {}

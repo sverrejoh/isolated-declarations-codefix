@@ -1,9 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   fixFixture,
-  writeTempFiles,
   getTscErrors,
   readTempFile,
+  writeTempFiles,
 } from "../helpers.ts";
 
 describe("formatting", () => {
@@ -25,9 +25,7 @@ describe("formatting", () => {
     const t = fixFixture("formatting");
     writeTempFiles(t);
     const errors = getTscErrors(t.tempDir);
-    const isoErrors = errors.filter(
-      (e) => /TS90(?:[0-2]\d|3[5-9])/.test(e),
-    );
+    const isoErrors = errors.filter((e) => /TS90(?:[0-2]\d|3[5-9])/.test(e));
     expect(isoErrors).toEqual([]);
   });
 });

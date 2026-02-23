@@ -1,27 +1,20 @@
-import { describe, it, expect } from "vitest";
-import {
-  fixFixture,
-  writeTempFiles,
-  getTscErrors,
-} from "../helpers.ts";
+import { describe, expect, it } from "vitest";
+import { fixFixture, getTscErrors, writeTempFiles } from "../helpers.ts";
 
 describe("enum-initializers", () => {
   it("applies fixes", () => {
     const t = fixFixture("enum-initializers");
     expect(t.result.totalChanges).toBeGreaterThan(0);
-    expect(
-      t.result.filesChanged.size,
-    ).toBeGreaterThan(0);
+    expect(t.result.filesChanged.size).toBeGreaterThan(0);
   });
 
   it("inlines same-file constant values", () => {
     const t = fixFixture("enum-initializers");
-    const inputFile = [...t.result.filesChanged].find(
-      (f) => f.endsWith("input.ts"),
+    const inputFile = [...t.result.filesChanged].find((f) =>
+      f.endsWith("input.ts")
     );
     expect(inputFile).toBeDefined();
-    const content =
-      t.project.getFileContent(inputFile!);
+    const content = t.project.getFileContent(inputFile!);
     expect(content).toContain('"hub"');
     expect(content).toContain('"teams"');
     expect(content).toContain("42");
@@ -33,12 +26,11 @@ describe("enum-initializers", () => {
 
   it("inlines cross-module constant values", () => {
     const t = fixFixture("enum-initializers");
-    const inputFile = [...t.result.filesChanged].find(
-      (f) => f.endsWith("input.ts"),
+    const inputFile = [...t.result.filesChanged].find((f) =>
+      f.endsWith("input.ts")
     );
     expect(inputFile).toBeDefined();
-    const content =
-      t.project.getFileContent(inputFile!);
+    const content = t.project.getFileContent(inputFile!);
     // Cross-module constants should be inlined
     // via the type literal fallback.
     expect(content).toContain('"remote-hub"');
@@ -51,9 +43,7 @@ describe("enum-initializers", () => {
     const t = fixFixture("enum-initializers");
     writeTempFiles(t);
     const errors = getTscErrors(t.tempDir);
-    const isoErrors = errors.filter((e) =>
-      /TS90(?:[0-2]\d|3[5-9])/.test(e),
-    );
+    const isoErrors = errors.filter((e) => /TS90(?:[0-2]\d|3[5-9])/.test(e));
     expect(isoErrors).toEqual([]);
   });
 
@@ -62,7 +52,7 @@ describe("enum-initializers", () => {
     writeTempFiles(t);
     const errors = getTscErrors(t.tempDir);
     const nonIsoErrors = errors.filter(
-      (e) => !/TS90(?:[0-2]\d|3[5-9])/.test(e),
+      (e) => !/TS90(?:[0-2]\d|3[5-9])/.test(e)
     );
     expect(nonIsoErrors).toEqual([]);
   });
