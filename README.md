@@ -47,6 +47,23 @@ console.log(result.passes);       // Number of fix passes needed
 3. Calls `getCombinedCodeFix` with fix ID `fixMissingTypeAnnotationOnExports` to get all fixes for the file at once
 4. Applies text edits bottom-to-top (descending position order) so earlier positions stay valid
 5. Repeats up to 5 passes since some fixes can expose new errors
-6. Writes fixed files to disk
+6. Runs readability transforms to clean up verbose annotations
+7. Writes fixed files to disk
 
 File versions are properly tracked so the language service invalidates its caches between passes — this avoids the stale-offset bug found in similar tools.
+
+## Readability transforms
+
+The TypeScript codefix produces correct but verbose type annotations — fully expanded structural types, inlined spread properties, exhaustive literal unions. After fixing, a pipeline of transforms collapses these back into idiomatic forms:
+
+| Transform | What it does |
+|---|---|
+| **typeof-intersection** | `{ a: number; b: number; debug: boolean }` → `typeof defaults & { debug: boolean }` for spread objects |
+| **tuple-spread-collapse** | `readonly ["+", "-", "*", "/"]` → `readonly [...typeof ops1, ...typeof ops2]` for spread arrays |
+| **extract-types** | Large inline type literals (5+ members) → named `interface` declarations, with cross-file dedup |
+| **inline-imports** | `typeof import("./mod")` → `typeof ModModule` with namespace import |
+| **collapse-unions** | `"Up" \| "Down" \| "Left" \| "Right"` → `keyof typeof Direction` when keys match |
+| **generic-alias** | Expanded structural return types → `Store<State>` when an alias symbol exists |
+| **strip-inner-return-types** | Removes redundant return types on inner callbacks nested inside already-typed exports |
+
+See [docs/transforms.md](docs/transforms.md) for detailed before/after examples.
