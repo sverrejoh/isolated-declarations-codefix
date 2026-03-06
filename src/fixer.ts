@@ -53,7 +53,13 @@ export interface FixOptions {
   maxPasses?: number;
   verbose?: boolean;
   rewriteInlineImports?: boolean;
+  typeofIntersection?: boolean;
+  tupleSpreadCollapse?: boolean;
+  extractTypes?: boolean;
   extractThreshold?: number;
+  collapseUnions?: boolean;
+  genericAlias?: boolean;
+  stripInnerReturnTypes?: boolean;
   onProgress?: (event: ProgressEvent) => void;
 }
 
@@ -63,7 +69,13 @@ interface FixContext {
   maxPasses: number;
   verbose: boolean;
   rewriteInlineImports: boolean;
+  typeofIntersection: boolean;
+  tupleSpreadCollapse: boolean;
+  extractTypes: boolean;
   extractThreshold: number;
+  collapseUnions: boolean;
+  genericAlias: boolean;
+  stripInnerReturnTypes: boolean;
   onProgress?: (event: ProgressEvent) => void;
   filesChanged: Set<string>;
   filesSkipped: Map<string, string>;
@@ -772,6 +784,12 @@ export function fix(
     maxPasses = 5,
     verbose = false,
     rewriteInlineImports = true,
+    typeofIntersection = true,
+    tupleSpreadCollapse = true,
+    extractTypes = true,
+    collapseUnions = true,
+    genericAlias = true,
+    stripInnerReturnTypes = true,
     onProgress,
   } = options;
 
@@ -780,7 +798,13 @@ export function fix(
     maxPasses,
     verbose,
     rewriteInlineImports,
+    typeofIntersection,
+    tupleSpreadCollapse,
+    extractTypes,
     extractThreshold: options.extractThreshold ?? 5,
+    collapseUnions,
+    genericAlias,
+    stripInnerReturnTypes,
     onProgress,
     filesChanged: new Set(),
     filesSkipped: new Map(),
@@ -813,7 +837,13 @@ export function fix(
   };
   const transformOptions: TransformOptions = {
     rewriteInlineImports: ctx.rewriteInlineImports,
+    typeofIntersection: ctx.typeofIntersection,
+    tupleSpreadCollapse: ctx.tupleSpreadCollapse,
+    extractTypes: ctx.extractTypes,
     extractThreshold: ctx.extractThreshold,
+    collapseUnions: ctx.collapseUnions,
+    genericAlias: ctx.genericAlias,
+    stripInnerReturnTypes: ctx.stripInnerReturnTypes,
     verbose: ctx.verbose,
   };
   runTransformPipeline(

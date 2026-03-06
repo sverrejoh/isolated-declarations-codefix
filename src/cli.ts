@@ -11,7 +11,13 @@ interface CliOptions {
   plain: boolean;
   write: boolean;
   rewriteInlineImports: boolean;
+  typeofIntersection: boolean;
+  tupleSpreadCollapse: boolean;
+  extractTypes: boolean;
   extractThreshold: number;
+  collapseUnions: boolean;
+  genericAlias: boolean;
+  stripInnerReturnTypes: boolean;
 }
 
 function parseArgs(args: string[]): CliOptions {
@@ -22,7 +28,13 @@ function parseArgs(args: string[]): CliOptions {
     plain: false,
     write: true,
     rewriteInlineImports: true,
+    typeofIntersection: true,
+    tupleSpreadCollapse: true,
+    extractTypes: true,
     extractThreshold: 5,
+    collapseUnions: true,
+    genericAlias: true,
+    stripInnerReturnTypes: true,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -40,6 +52,18 @@ function parseArgs(args: string[]): CliOptions {
       opts.write = false;
     } else if (arg === "--no-rewrite-inline-imports") {
       opts.rewriteInlineImports = false;
+    } else if (arg === "--no-typeof-intersection") {
+      opts.typeofIntersection = false;
+    } else if (arg === "--no-tuple-spread-collapse") {
+      opts.tupleSpreadCollapse = false;
+    } else if (arg === "--no-extract-types") {
+      opts.extractTypes = false;
+    } else if (arg === "--no-collapse-unions") {
+      opts.collapseUnions = false;
+    } else if (arg === "--no-generic-alias") {
+      opts.genericAlias = false;
+    } else if (arg === "--no-strip-inner-return-types") {
+      opts.stripInnerReturnTypes = false;
     } else if (arg === "--extract-threshold") {
       opts.extractThreshold = parseInt(args[++i], 10);
     } else if (arg === "--help" || arg === "-h") {
@@ -68,6 +92,15 @@ Options:
   --no-write            Don't write files to disk
   --no-rewrite-inline-imports
                         Keep typeof import() as-is
+  --no-typeof-intersection
+                        Skip typeof X & {...} rewrite
+  --no-tuple-spread-collapse
+                        Skip [...typeof X] rewrite
+  --no-extract-types    Skip large type extraction
+  --no-collapse-unions  Skip keyof typeof rewrite
+  --no-generic-alias    Skip generic alias simplification
+  --no-strip-inner-return-types
+                        Keep inner callback return types
   --extract-threshold <n>
                         Extract inline types with more than
                         n members to interfaces (default: 5)
@@ -93,7 +126,13 @@ export function main(): void {
   const startTime = Date.now();
   const result = fix(project, {
     rewriteInlineImports: opts.rewriteInlineImports,
+    typeofIntersection: opts.typeofIntersection,
+    tupleSpreadCollapse: opts.tupleSpreadCollapse,
+    extractTypes: opts.extractTypes,
     extractThreshold: opts.extractThreshold,
+    collapseUnions: opts.collapseUnions,
+    genericAlias: opts.genericAlias,
+    stripInnerReturnTypes: opts.stripInnerReturnTypes,
     onProgress: (e) => {
       if (e.type === "file-scanned") {
         renderer.onFileScanned(e.fileName);

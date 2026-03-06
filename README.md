@@ -26,6 +26,14 @@ npx tsx src/cli.ts --verbose
 | `--dry-run` | Show which files would change without writing |
 | `--verbose` | Print per-file diagnostic counts and pass info |
 | `--no-write` | Run fixes in memory but don't write to disk |
+| `--no-rewrite-inline-imports` | Keep `typeof import()` as-is |
+| `--no-typeof-intersection` | Skip `typeof X & {...}` rewrite |
+| `--no-tuple-spread-collapse` | Skip `[...typeof X]` rewrite |
+| `--no-extract-types` | Skip large type extraction to interfaces |
+| `--no-collapse-unions` | Skip `keyof typeof` rewrite |
+| `--no-generic-alias` | Skip generic alias simplification |
+| `--no-strip-inner-return-types` | Keep inner callback return types |
+| `--extract-threshold <n>` | Member count for type extraction (default: 5) |
 
 ## Programmatic API
 

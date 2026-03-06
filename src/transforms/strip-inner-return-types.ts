@@ -9,6 +9,7 @@ import {
 import type {
   ReadabilityTransform,
   TransformContext,
+  TransformOptions,
 } from "./types.ts";
 
 /**
@@ -312,8 +313,8 @@ export const stripInnerReturnTypesTransform: ReadabilityTransform =
   {
     name: "strip-inner-return-types",
     scope: "changed",
-    isEnabled() {
-      return true;
+    isEnabled(options: TransformOptions) {
+      return options.stripInnerReturnTypes;
     },
     transformFile(
       fileName: string,

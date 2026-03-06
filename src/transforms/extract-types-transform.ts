@@ -30,7 +30,7 @@ export function createExtractTypesTransform(): ReadabilityTransform & {
 
     isEnabled(options: TransformOptions) {
       threshold = options.extractThreshold;
-      return true;
+      return options.extractTypes;
     },
 
     transformFile(

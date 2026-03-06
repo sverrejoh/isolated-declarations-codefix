@@ -229,8 +229,8 @@ export const typeofIntersectionTransform: ReadabilityTransform =
   {
     name: "typeof-intersection",
     scope: "changed",
-    isEnabled() {
-      return true;
+    isEnabled(options: TransformOptions) {
+      return options.typeofIntersection;
     },
     transformFile(
       fileName: string,

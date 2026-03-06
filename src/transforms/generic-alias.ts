@@ -423,8 +423,8 @@ export const genericAliasTransform: ReadabilityTransform =
   {
     name: "generic-alias",
     scope: "changed",
-    isEnabled() {
-      return true;
+    isEnabled(options: TransformOptions) {
+      return options.genericAlias;
     },
     transformFile(
       fileName: string,

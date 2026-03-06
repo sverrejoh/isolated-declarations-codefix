@@ -15,7 +15,13 @@ export interface TransformContext {
 
 export interface TransformOptions {
   rewriteInlineImports: boolean;
+  typeofIntersection: boolean;
+  tupleSpreadCollapse: boolean;
+  extractTypes: boolean;
   extractThreshold: number;
+  collapseUnions: boolean;
+  genericAlias: boolean;
+  stripInnerReturnTypes: boolean;
   verbose: boolean;
 }
 

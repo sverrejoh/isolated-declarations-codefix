@@ -191,8 +191,8 @@ export const collapseUnionsTransform: ReadabilityTransform =
   {
     name: "collapse-unions",
     scope: "all",
-    isEnabled() {
-      return true;
+    isEnabled(options: TransformOptions) {
+      return options.collapseUnions;
     },
     transformFile(
       fileName: string,

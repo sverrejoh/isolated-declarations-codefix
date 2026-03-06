@@ -217,8 +217,8 @@ export const tupleSpreadCollapseTransform: ReadabilityTransform =
   {
     name: "tuple-spread-collapse",
     scope: "changed",
-    isEnabled() {
-      return true;
+    isEnabled(options: TransformOptions) {
+      return options.tupleSpreadCollapse;
     },
     transformFile(
       fileName: string,
