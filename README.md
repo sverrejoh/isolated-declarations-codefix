@@ -67,7 +67,7 @@ The TypeScript codefix produces correct but verbose type annotations — fully e
 | Transform | What it does |
 |---|---|
 | **typeof-intersection** | `{ a: number; b: number; debug: boolean }` → `typeof defaults & { debug: boolean }` for spread objects |
-| **tuple-spread-collapse** | `readonly ["+", "-", "*", "/"]` → `readonly [...typeof ops1, ...typeof ops2]` for spread arrays |
+| **tuple-spread-collapse** | When `[...a, ...b] as const` gets its type expanded to every element, collapses back to `readonly [...typeof a, ...typeof b]` |
 | **extract-types** | Large inline type literals (5+ members) → named `interface` declarations, with cross-file dedup |
 | **inline-imports** | `typeof import("./mod")` → `typeof ModModule` with namespace import |
 | **collapse-unions** | `"Up" \| "Down" \| "Left" \| "Right"` → `keyof typeof Direction` when keys match |
