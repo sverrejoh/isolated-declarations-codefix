@@ -256,29 +256,45 @@ The codefix adds return type annotations to all functions, including inner callb
 ### Before (after codefix)
 
 ```typescript
-export function getHandlers(): {
-  onClick: (e: Event) => void;
-} {
+export const createApi = (): {
+  getUser: (id: string) => Promise<User>;
+  listUsers: (filter: Filter) => Promise<User[]>;
+  deleteUser: (id: string) => Promise<boolean>;
+} => {
   return {
-    onClick: (e: Event): void => {
-      console.log(e);
+    getUser: (id: string): Promise<User> => {
+      return db.findUser(id);
+    },
+    listUsers: (filter: Filter): Promise<User[]> => {
+      return db.query(filter);
+    },
+    deleteUser: (id: string): Promise<boolean> => {
+      return db.remove(id);
     },
   };
-}
+};
 ```
 
 ### After
 
 ```typescript
-export function getHandlers(): {
-  onClick: (e: Event) => void;
-} {
+export const createApi = (): {
+  getUser: (id: string) => Promise<User>;
+  listUsers: (filter: Filter) => Promise<User[]>;
+  deleteUser: (id: string) => Promise<boolean>;
+} => {
   return {
-    onClick: (e: Event) => {
-      console.log(e);
+    getUser: (id: string) => {
+      return db.findUser(id);
+    },
+    listUsers: (filter: Filter) => {
+      return db.query(filter);
+    },
+    deleteUser: (id: string) => {
+      return db.remove(id);
     },
   };
-}
+};
 ```
 
-Only strips annotations that were **added by the codefix** (not present in the original file). Skips directly exported functions, generic functions, and functions not nested inside a typed export. Validates that removing the annotation doesn't introduce new errors — rolls back if it does.
+The outer return type already declares what each callback returns, so the `: Promise<User>`, `: Promise<User[]>`, and `: Promise<boolean>` annotations on the inner functions are redundant. Only strips annotations that were **added by the codefix** (not present in the original file). Skips directly exported functions, generic functions, and functions not nested inside a typed export. Validates that removing the annotation doesn't introduce new errors — rolls back if it does.
