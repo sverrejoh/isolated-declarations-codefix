@@ -22,6 +22,7 @@ export interface TransformOptions {
   collapseUnions: boolean;
   genericAlias: boolean;
   stripInnerReturnTypes: boolean;
+  banTypes: boolean;
   verbose: boolean;
 }
 

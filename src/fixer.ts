@@ -14,6 +14,7 @@ import { inlineImportsTransform } from "./transforms/inline-imports.ts";
 import { collapseUnionsTransform } from "./transforms/collapse-unions.ts";
 import { genericAliasTransform } from "./transforms/generic-alias.ts";
 import { stripInnerReturnTypesTransform } from "./transforms/strip-inner-return-types.ts";
+import { banTypesTransform } from "./transforms/ban-types.ts";
 import type { Project } from "./project.ts";
 
 const FIX_ID = "fixMissingTypeAnnotationOnExports";
@@ -60,6 +61,7 @@ export interface FixOptions {
   collapseUnions?: boolean;
   genericAlias?: boolean;
   stripInnerReturnTypes?: boolean;
+  banTypes?: boolean;
   onProgress?: (event: ProgressEvent) => void;
 }
 
@@ -76,6 +78,7 @@ interface FixContext {
   collapseUnions: boolean;
   genericAlias: boolean;
   stripInnerReturnTypes: boolean;
+  banTypes: boolean;
   onProgress?: (event: ProgressEvent) => void;
   filesChanged: Set<string>;
   filesSkipped: Map<string, string>;
@@ -598,6 +601,90 @@ function runEnumFixer(ctx: FixContext): void {
 }
 
 /**
+ * Last-resort fixer for iso-decl errors that the
+ * built-in TS fixer can't handle or whose fixes
+ * were rolled back by validation:
+ *
+ * TS9013 — expression type can't be inferred:
+ *   `component: Comp` → `component: Comp as typeof Comp`
+ *   Only for identifiers and dotted names.
+ *
+ * TS9017 — only const arrays can be inferred:
+ *   `["autodocs"]` → `["autodocs"] as const`
+ */
+function runExpressionFixer(ctx: FixContext): void {
+  const program =
+    ctx.project.languageService.getProgram();
+  if (!program) return;
+
+  for (const sf of program.getSourceFiles()) {
+    if (sf.fileName.includes("node_modules")) continue;
+    if (sf.isDeclarationFile) continue;
+
+    const diags = ctx.project.languageService
+      .getSemanticDiagnostics(sf.fileName)
+      .filter(
+        (d) =>
+          (d.code === 9013 || d.code === 9017) &&
+          d.start !== undefined
+      );
+    if (diags.length === 0) continue;
+
+    let content = ctx.project.getFileContent(
+      sf.fileName
+    );
+    if (!ctx.snapshots.has(sf.fileName)) {
+      ctx.snapshots.set(sf.fileName, content);
+    }
+
+    let fixed = 0;
+    const sorted = [...diags].sort(
+      (a, b) => b.start! - a.start!
+    );
+    for (const d of sorted) {
+      const pos = d.start!;
+      const end = pos + (d.length ?? 0);
+      const exprText = content.slice(pos, end);
+
+      if (d.code === 9017) {
+        // Array literal → add as const
+        content =
+          content.slice(0, end) +
+          " as const" +
+          content.slice(end);
+        fixed++;
+      } else if (d.code === 9013) {
+        // Only fix identifiers and dotted names
+        // (valid typeof targets).
+        if (
+          !/^[a-zA-Z_$][\w$]*(\.[a-zA-Z_$][\w$]*)*$/
+            .test(exprText)
+        ) {
+          continue;
+        }
+        content =
+          content.slice(0, end) +
+          ` as typeof ${exprText}` +
+          content.slice(end);
+        fixed++;
+      }
+    }
+
+    if (fixed > 0) {
+      ctx.project.updateFile(sf.fileName, content);
+      ctx.filesChanged.add(sf.fileName);
+      ctx.filesSkipped.delete(sf.fileName);
+      ctx.totalChanges += fixed;
+      ctx.onProgress?.({
+        type: "file",
+        fileName: sf.fileName,
+        edits: fixed,
+      });
+    }
+  }
+}
+
+/**
  * Validate changed files for NEW non-iso errors.
  * Tries organizeImports and bare Promise repair
  * before reverting. Falls back to validated
@@ -790,6 +877,7 @@ export function fix(
     collapseUnions = true,
     genericAlias = true,
     stripInnerReturnTypes = true,
+    banTypes = true,
     onProgress,
   } = options;
 
@@ -805,6 +893,7 @@ export function fix(
     collapseUnions,
     genericAlias,
     stripInnerReturnTypes,
+    banTypes,
     onProgress,
     filesChanged: new Set(),
     filesSkipped: new Map(),
@@ -826,6 +915,7 @@ export function fix(
     collapseUnionsTransform,
     genericAliasTransform,
     stripInnerReturnTypesTransform,
+    banTypesTransform,
   ];
   const transformCtx: TransformContext = {
     project: ctx.project,
@@ -844,6 +934,7 @@ export function fix(
     collapseUnions: ctx.collapseUnions,
     genericAlias: ctx.genericAlias,
     stripInnerReturnTypes: ctx.stripInnerReturnTypes,
+    banTypes: ctx.banTypes,
     verbose: ctx.verbose,
   };
   runTransformPipeline(
@@ -853,5 +944,6 @@ export function fix(
   );
 
   runValidation(ctx);
+  runExpressionFixer(ctx);
   return buildResult(ctx);
 }

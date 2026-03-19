@@ -18,6 +18,7 @@ interface CliOptions {
   collapseUnions: boolean;
   genericAlias: boolean;
   stripInnerReturnTypes: boolean;
+  banTypes: boolean;
 }
 
 function parseArgs(args: string[]): CliOptions {
@@ -35,6 +36,7 @@ function parseArgs(args: string[]): CliOptions {
     collapseUnions: true,
     genericAlias: true,
     stripInnerReturnTypes: true,
+    banTypes: true,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -64,6 +66,8 @@ function parseArgs(args: string[]): CliOptions {
       opts.genericAlias = false;
     } else if (arg === "--no-strip-inner-return-types") {
       opts.stripInnerReturnTypes = false;
+    } else if (arg === "--no-ban-types") {
+      opts.banTypes = false;
     } else if (arg === "--extract-threshold") {
       opts.extractThreshold = parseInt(args[++i], 10);
     } else if (arg === "--help" || arg === "-h") {
@@ -101,6 +105,7 @@ Options:
   --no-generic-alias    Skip generic alias simplification
   --no-strip-inner-return-types
                         Keep inner callback return types
+  --no-ban-types        Keep {} type literals as-is
   --extract-threshold <n>
                         Extract inline types with more than
                         n members to interfaces (default: 5)
@@ -133,6 +138,7 @@ export function main(): void {
     collapseUnions: opts.collapseUnions,
     genericAlias: opts.genericAlias,
     stripInnerReturnTypes: opts.stripInnerReturnTypes,
+    banTypes: opts.banTypes,
     onProgress: (e) => {
       if (e.type === "file-scanned") {
         renderer.onFileScanned(e.fileName);

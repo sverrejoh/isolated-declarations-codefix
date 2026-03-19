@@ -6,6 +6,7 @@ export { collapseTupleSpreads } from "./transforms/tuple-spread-collapse.ts";
 export { collapseKeyofTypeofUnions } from "./transforms/collapse-unions.ts";
 export { rewriteInlineImportTypes } from "./transforms/inline-imports.ts";
 export { stripInnerReturnTypes } from "./transforms/strip-inner-return-types.ts";
+export { rewriteBanTypes } from "./transforms/ban-types.ts";
 export { runTransformPipeline } from "./transforms/pipeline.ts";
 export type {
   ReadabilityTransform,
