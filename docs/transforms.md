@@ -11,6 +11,7 @@ Transforms run in this order (defined in `src/fixer.ts`):
 5. [collapse-unions](#5-collapse-unions)
 6. [generic-alias](#6-generic-alias)
 7. [strip-inner-return-types](#7-strip-inner-return-types)
+8. [ban-types](#8-ban-types)
 
 ---
 
@@ -298,3 +299,31 @@ export const createApi = (): {
 ```
 
 The outer return type already declares what each callback returns, so the `: Promise<User>`, `: Promise<User[]>`, and `: Promise<boolean>` annotations on the inner functions are redundant. Only strips annotations that were **added by the codefix** (not present in the original file). Skips directly exported functions, generic functions, and functions not nested inside a typed export. Validates that removing the annotation doesn't introduce new errors — rolls back if it does.
+
+---
+
+## 8. ban-types
+
+**File:** `src/transforms/ban-types.ts`
+**Scope:** changed files only
+**Always enabled**
+
+The codefix sometimes emits `{}` as a type annotation (empty type literal). This triggers the `@typescript-eslint/ban-types` lint rule. This transform replaces empty `{}` type literals with `object`.
+
+### Before
+
+```typescript
+export function process(options: {}): void {
+  // ...
+}
+```
+
+### After
+
+```typescript
+export function process(options: object): void {
+  // ...
+}
+```
+
+Only replaces `TypeLiteralNode` with zero members. Non-empty type literals like `{ a: number }` and object literal values `{}` are untouched.

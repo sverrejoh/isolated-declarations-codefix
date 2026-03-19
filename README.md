@@ -33,6 +33,7 @@ npx tsx src/cli.ts --verbose
 | `--no-collapse-unions` | Skip `keyof typeof` rewrite |
 | `--no-generic-alias` | Skip generic alias simplification |
 | `--no-strip-inner-return-types` | Keep inner callback return types |
+| `--no-ban-types` | Keep `{}` type literals as-is |
 | `--extract-threshold <n>` | Member count for type extraction (default: 5) |
 
 ## Programmatic API
@@ -55,8 +56,10 @@ console.log(result.passes);       // Number of fix passes needed
 3. Calls `getCombinedCodeFix` with fix ID `fixMissingTypeAnnotationOnExports` to get all fixes for the file at once
 4. Applies text edits bottom-to-top (descending position order) so earlier positions stay valid
 5. Repeats up to 5 passes since some fixes can expose new errors
-6. Runs readability transforms to clean up verbose annotations
-7. Writes fixed files to disk
+6. Runs custom fixers for TS9020 (enum initializers), TS9013 (expression types), and TS9017 (non-const arrays)
+7. Runs readability transforms to clean up verbose annotations
+8. Validates that fixes don't introduce new errors; rolls back and retries per-fix if needed
+9. Writes fixed files to disk
 
 File versions are properly tracked so the language service invalidates its caches between passes — this avoids the stale-offset bug found in similar tools.
 
@@ -73,5 +76,18 @@ The TypeScript codefix produces correct but verbose type annotations — fully e
 | **collapse-unions** | `"Up" \| "Down" \| "Left" \| "Right"` → `keyof typeof Direction` when keys match |
 | **generic-alias** | Expanded structural return types → `Store<State>` when an alias symbol exists |
 | **strip-inner-return-types** | Removes redundant return types on inner callbacks nested inside already-typed exports |
+| **ban-types** | `{}` → `object` to satisfy `@typescript-eslint/ban-types` |
+
+## Custom fixers
+
+The TypeScript language service doesn't provide code fixes for every `isolatedDeclarations` error. These custom fixers handle the gaps:
+
+| Error | Pattern | Fix |
+|---|---|---|
+| **TS9020** | `enum Foo { A = ExternalConst }` | Inlines constant value from checker |
+| **TS9013** | `component: ReferenceItem` | → `component: ReferenceItem as typeof ReferenceItem` |
+| **TS9017** | `tags: ["autodocs"]` | → `tags: ["autodocs"] as const` |
+
+The TS9013/TS9017 fixers run after validation, so they also recover diagnostics in files whose core fixes were rolled back due to side effects.
 
 See [docs/transforms.md](docs/transforms.md) for detailed before/after examples.
