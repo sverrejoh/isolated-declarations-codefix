@@ -36,7 +36,7 @@ function computeFunctionKey(
     } else if (ts.isMethodDeclaration(cur) && ts.isIdentifier(cur.name)) {
       parts.unshift(cur.name.text);
     } else if (ts.isClassDeclaration(cur) && cur.name) {
-      parts.unshift(cur.name.text.text);
+      parts.unshift(cur.name.text);
     } else if (
       ts.isCallExpression(cur) &&
       node.parent === cur
