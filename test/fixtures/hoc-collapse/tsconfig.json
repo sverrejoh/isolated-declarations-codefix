@@ -1,4 +1,12 @@
 {
   "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@card-framework/core": [
+        "./typings/card-framework-core"
+      ]
+    }
+  },
   "include": ["./*.ts"]
 }
