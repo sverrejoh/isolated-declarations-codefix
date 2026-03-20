@@ -611,11 +611,51 @@ function runEnumFixer(ctx: FixContext): void {
  *
  * TS9017 — only const arrays can be inferred:
  *   `["autodocs"]` → `["autodocs"] as const`
+ *
+ * TS9037 — default export can't be inferred:
+ *   `export default memo(X)` →
+ *   `export default (memo(X)) as <serialized type>`
  */
+/**
+ * Find the innermost AST node whose span exactly
+ * matches [start, start+length).
+ */
+function findNodeCoveringSpan(
+  sf: ts.SourceFile,
+  start: number,
+  length: number
+): ts.Node | undefined {
+  const end = start + length;
+  function visit(
+    node: ts.Node
+  ): ts.Node | undefined {
+    const ns = node.getStart(sf);
+    const ne = node.getEnd();
+    if (ns === start && ne === end) return node;
+    if (ns <= start && ne >= end) {
+      return ts.forEachChild(node, visit);
+    }
+    return undefined;
+  }
+  return visit(sf);
+}
+
+/** True for Identifier or X.Y.Z property chains. */
+function isTypeofTarget(node: ts.Node): boolean {
+  if (ts.isIdentifier(node)) return true;
+  if (ts.isPropertyAccessExpression(node)) {
+    return isTypeofTarget(node.expression);
+  }
+  return false;
+}
+
+const typeAsserPrinter = ts.createPrinter();
+
 function runExpressionFixer(ctx: FixContext): void {
   const program =
     ctx.project.languageService.getProgram();
   if (!program) return;
+  const checker = program.getTypeChecker();
 
   for (const sf of program.getSourceFiles()) {
     if (sf.fileName.includes("node_modules")) continue;
@@ -625,7 +665,9 @@ function runExpressionFixer(ctx: FixContext): void {
       .getSemanticDiagnostics(sf.fileName)
       .filter(
         (d) =>
-          (d.code === 9013 || d.code === 9017) &&
+          (d.code === 9013 ||
+            d.code === 9017 ||
+            d.code === 9037) &&
           d.start !== undefined
       );
     if (diags.length === 0) continue;
@@ -647,24 +689,49 @@ function runExpressionFixer(ctx: FixContext): void {
       const exprText = content.slice(pos, end);
 
       if (d.code === 9017) {
-        // Array literal → add as const
         content =
           content.slice(0, end) +
           " as const" +
           content.slice(end);
         fixed++;
-      } else if (d.code === 9013) {
-        // Only fix identifiers and dotted names
-        // (valid typeof targets).
-        if (
-          !/^[a-zA-Z_$][\w$]*(\.[a-zA-Z_$][\w$]*)*$/
-            .test(exprText)
-        ) {
-          continue;
-        }
+        continue;
+      }
+
+      // TS9013: find the AST node for the expr
+      const node = findNodeCoveringSpan(
+        sf,
+        pos,
+        d.length ?? 0
+      );
+      if (!node) continue;
+
+      if (isTypeofTarget(node)) {
+        // Identifier or A.B.C → `as typeof expr`
         content =
           content.slice(0, end) +
           ` as typeof ${exprText}` +
+          content.slice(end);
+        fixed++;
+      } else {
+        // Complex expression → checker-serialized type
+        const type = checker.getTypeAtLocation(node);
+        if (type.flags & ts.TypeFlags.Any) continue;
+
+        const typeNode = checker.typeToTypeNode(
+          type,
+          node,
+          ts.NodeBuilderFlags.NoTruncation
+        );
+        if (!typeNode) continue;
+
+        const typeText = typeAsserPrinter.printNode(
+          ts.EmitHint.Unspecified,
+          typeNode,
+          sf
+        );
+        content =
+          content.slice(0, pos) +
+          `(${exprText}) as ${typeText}` +
           content.slice(end);
         fixed++;
       }

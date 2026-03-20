@@ -142,14 +142,171 @@ describe("runExpressionFixer", () => {
     expect(diagsAfter).toEqual([]);
   });
 
-  it("skips non-identifier expressions", () => {
-    // Regex should NOT match function calls
-    const pattern =
-      /^[a-zA-Z_$][\w$]*(\.[a-zA-Z_$][\w$]*)*$/;
-    expect(pattern.test("Component")).toBe(true);
-    expect(pattern.test("A.B.C")).toBe(true);
-    expect(pattern.test("foo()")).toBe(false);
-    expect(pattern.test("a + b")).toBe(false);
-    expect(pattern.test("new Foo()")).toBe(false);
+  it("uses typeof for identifiers, type assertion for complex expressions", () => {
+    const project = makeProject({
+      "mod.ts": [
+        "export function run(): void {}",
+        "export const noop = (): void => {};",
+      ].join("\n"),
+      "input.ts": [
+        'import { run, noop } from "./mod.ts";',
+        "export default {",
+        "  simple: run,",
+        "  fallback: run || noop,",
+        "};",
+      ].join("\n"),
+    });
+
+    // Force expression fixer path
+    project.languageService.getCombinedCodeFix =
+      () => ({ changes: [] });
+    project.languageService.getCodeFixesAtPosition =
+      () => [];
+
+    const file = resolve(
+      project.getRootDir(),
+      "input.ts"
+    );
+    fix(project);
+
+    const content = project.getFileContent(file);
+    // Identifier → typeof
+    expect(content).toContain("as typeof run");
+    // Binary expression → checker-serialized type
+    expect(content).toContain(") as ");
+
+    const after = project.languageService
+      .getSemanticDiagnostics(file)
+      .filter((d) => d.code === 9013);
+    expect(after).toEqual([]);
+  });
+
+  it("fixes X || noop via expression fixer", () => {
+    const project = makeProject({
+      "actions.ts": [
+        "const noop = (): void => {};",
+        "export const Module = {",
+        "  doThing: undefined as",
+        "    | ((x: string) => void)",
+        "    | undefined,",
+        "};",
+        "export const Actions = {",
+        "  doThing: Module.doThing || noop,",
+        "};",
+      ].join("\n"),
+    });
+
+    // Force built-in fixer to skip so expression
+    // fixer handles the || pattern
+    project.languageService.getCombinedCodeFix =
+      () => ({ changes: [] });
+    project.languageService.getCodeFixesAtPosition =
+      () => [];
+
+    const file = resolve(
+      project.getRootDir(),
+      "actions.ts"
+    );
+
+    const before = project.languageService
+      .getSemanticDiagnostics(file)
+      .filter((d) => d.code === 9013);
+    expect(before.length).toBeGreaterThan(0);
+
+    const result = fix(project);
+    expect(result.totalChanges).toBeGreaterThan(0);
+
+    const after = project.languageService
+      .getSemanticDiagnostics(file)
+      .filter((d) => d.code === 9013);
+    expect(after).toEqual([]);
+
+    const content = project.getFileContent(file);
+    expect(content).toContain(") as ");
+  });
+
+  it("fixes multiple || noop in one object", () => {
+    const project = makeProject({
+      "multi.ts": [
+        "const noop = (): void => {};",
+        "export const Mod = {",
+        "  a: undefined as",
+        "    | ((x: string) => void)",
+        "    | undefined,",
+        "  b: undefined as",
+        "    | ((y: number) => void)",
+        "    | undefined,",
+        "};",
+        "export const Actions = {",
+        "  a: Mod.a || noop,",
+        "  b: Mod.b || noop,",
+        "};",
+      ].join("\n"),
+    });
+
+    // Force expression fixer path
+    project.languageService.getCombinedCodeFix =
+      () => ({ changes: [] });
+    project.languageService.getCodeFixesAtPosition =
+      () => [];
+
+    const file = resolve(
+      project.getRootDir(),
+      "multi.ts"
+    );
+
+    const result = fix(project);
+    expect(result.totalChanges).toBeGreaterThanOrEqual(
+      2
+    );
+
+    const after = project.languageService
+      .getSemanticDiagnostics(file)
+      .filter((d) => d.code === 9013);
+    expect(after).toEqual([]);
+  });
+
+  it("resolves TS9037 on default export of call expression", () => {
+    const project = makeProject({
+      "hoc.ts": [
+        "interface Wrapped<T> {",
+        "  inner: T;",
+        "  displayName?: string;",
+        "}",
+        "function wrap<T>(c: T): Wrapped<T> {",
+        "  return { inner: c };",
+        "}",
+        "function Comp(): string {",
+        '  return "hi";',
+        "}",
+        "export default wrap(Comp);",
+      ].join("\n"),
+    });
+
+    // Force expression fixer path
+    project.languageService.getCombinedCodeFix =
+      () => ({ changes: [] });
+    project.languageService.getCodeFixesAtPosition =
+      () => [];
+
+    const file = resolve(
+      project.getRootDir(),
+      "hoc.ts"
+    );
+
+    const before = project.languageService
+      .getSemanticDiagnostics(file)
+      .filter((d) => d.code === 9037);
+    expect(before.length).toBeGreaterThan(0);
+
+    fix(project);
+
+    const after = project.languageService
+      .getSemanticDiagnostics(file)
+      .filter((d) => d.code === 9037);
+    expect(after).toEqual([]);
+
+    const content = project.getFileContent(file);
+    expect(content).toContain(") as ");
   });
 });
