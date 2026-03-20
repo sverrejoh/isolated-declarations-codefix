@@ -1077,6 +1077,7 @@ export function fix(
 
   runCoreFixes(ctx);
   runEnumFixer(ctx);
+  runExpressionFixer(ctx);
 
   const transforms: ReadabilityTransform[] = [
     typeofIntersectionTransform,
@@ -1115,6 +1116,5 @@ export function fix(
   );
 
   runValidation(ctx);
-  runExpressionFixer(ctx);
   return buildResult(ctx);
 }
