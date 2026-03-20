@@ -605,6 +605,10 @@ function runEnumFixer(ctx: FixContext): void {
  * built-in TS fixer can't handle or whose fixes
  * were rolled back by validation:
  *
+ * TS9010 — variable needs explicit type annotation:
+ *   `export const X = createLazy(...)` →
+ *   `export const X: ReturnType = createLazy(...)`
+ *
  * TS9013 — expression type can't be inferred:
  *   `component: Comp` → `component: Comp as typeof Comp`
  *   Only for identifiers and dotted names.
@@ -651,6 +655,58 @@ function isTypeofTarget(node: ts.Node): boolean {
 
 const typeAsserPrinter = ts.createPrinter();
 
+/**
+ * Replace destructured parameter binding patterns
+ * with simple identifiers in a type node.
+ *
+ * checker.typeToTypeNode() preserves destructured
+ * parameter names including renames like
+ * `{ enabled: enabledInternal }`. In a type position
+ * TS interprets `enabled: enabledInternal` as a type
+ * annotation, causing TS2842. Fix by replacing the
+ * entire binding pattern with a plain identifier.
+ */
+function sanitizeTypeNode(
+  typeNode: ts.TypeNode
+): ts.TypeNode {
+  const result = ts.transform(typeNode, [
+    (context) => {
+      const visitor: ts.Visitor<
+        ts.Node,
+        ts.Node
+      > = (node) => {
+        if (
+          ts.isParameter(node) &&
+          (ts.isObjectBindingPattern(node.name) ||
+            ts.isArrayBindingPattern(node.name))
+        ) {
+          return ts.factory.createParameterDeclaration(
+            node.modifiers,
+            node.dotDotDotToken,
+            ts.factory.createIdentifier("args"),
+            node.questionToken,
+            node.type,
+            node.initializer
+          );
+        }
+        return ts.visitEachChild(
+          node,
+          visitor,
+          context
+        );
+      };
+      return (rootNode) =>
+        ts.visitNode(
+          rootNode,
+          visitor
+        ) as ts.TypeNode;
+    },
+  ]);
+  const sanitized = result.transformed[0];
+  result.dispose();
+  return sanitized;
+}
+
 function runExpressionFixer(ctx: FixContext): void {
   const program =
     ctx.project.languageService.getProgram();
@@ -665,7 +721,8 @@ function runExpressionFixer(ctx: FixContext): void {
       .getSemanticDiagnostics(sf.fileName)
       .filter(
         (d) =>
-          (d.code === 9013 ||
+          (d.code === 9010 ||
+            d.code === 9013 ||
             d.code === 9017 ||
             d.code === 9037) &&
           d.start !== undefined
@@ -687,6 +744,52 @@ function runExpressionFixer(ctx: FixContext): void {
       const pos = d.start!;
       const end = pos + (d.length ?? 0);
       const exprText = content.slice(pos, end);
+
+      // TS9010: variable needs type annotation.
+      // Diagnostic span covers the variable name;
+      // insert `: Type` right after it.
+      if (d.code === 9010) {
+        const nameNode = findNodeCoveringSpan(
+          sf,
+          pos,
+          d.length ?? 0
+        );
+        if (!nameNode) continue;
+        const varDecl = nameNode.parent;
+        if (
+          !ts.isVariableDeclaration(varDecl) ||
+          !varDecl.initializer ||
+          varDecl.type
+        )
+          continue;
+
+        const type = checker.getTypeAtLocation(
+          varDecl.initializer
+        );
+        if (type.flags & ts.TypeFlags.Any) continue;
+
+        const typeNode = checker.typeToTypeNode(
+          type,
+          varDecl,
+          ts.NodeBuilderFlags.NoTruncation
+        );
+        if (!typeNode) continue;
+
+        const sanitized = sanitizeTypeNode(typeNode);
+        const typeText =
+          typeAsserPrinter.printNode(
+            ts.EmitHint.Unspecified,
+            sanitized,
+            sf
+          );
+
+        content =
+          content.slice(0, end) +
+          `: ${typeText}` +
+          content.slice(end);
+        fixed++;
+        continue;
+      }
 
       if (d.code === 9017) {
         content =
@@ -724,9 +827,10 @@ function runExpressionFixer(ctx: FixContext): void {
         );
         if (!typeNode) continue;
 
+        const sanitized = sanitizeTypeNode(typeNode);
         const typeText = typeAsserPrinter.printNode(
           ts.EmitHint.Unspecified,
-          typeNode,
+          sanitized,
           sf
         );
         content =

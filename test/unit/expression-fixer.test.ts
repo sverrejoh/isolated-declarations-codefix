@@ -309,4 +309,196 @@ describe("runExpressionFixer", () => {
     const content = project.getFileContent(file);
     expect(content).toContain(") as ");
   });
+
+  it("sanitizes destructured param renames in serialized type (TS2842)", () => {
+    const project = makeProject({
+      "memo.ts": [
+        "interface Props {",
+        "  enabled: boolean;",
+        "  label: string;",
+        "}",
+        "interface Memo<T> {",
+        "  inner: T;",
+        "}",
+        "function memo<T>(c: T): Memo<T> {",
+        "  return { inner: c };",
+        "}",
+        "function Comp({",
+        "  enabled: enabledInternal,",
+        "  label,",
+        "}: Props): string {",
+        '  return enabledInternal ? label : "";',
+        "}",
+        "export default memo(Comp);",
+      ].join("\n"),
+    });
+
+    // Force expression fixer path
+    project.languageService.getCombinedCodeFix =
+      () => ({ changes: [] });
+    project.languageService.getCodeFixesAtPosition =
+      () => [];
+
+    const file = resolve(
+      project.getRootDir(),
+      "memo.ts"
+    );
+
+    fix(project);
+
+    const content = project.getFileContent(file);
+    // The type assertion should use simple param name,
+    // not the destructured rename
+    const assertion = content.slice(
+      content.indexOf(") as ")
+    );
+    expect(assertion).not.toContain(
+      "enabledInternal"
+    );
+    expect(assertion).toContain("args: Props");
+
+    // Should have no TS2842 errors
+    const errors = project.languageService
+      .getSemanticDiagnostics(file)
+      .filter((d) => d.code === 2842);
+    expect(errors).toEqual([]);
+  });
+
+  it("resolves TS9010 on variable with complex initializer", () => {
+    const project = makeProject({
+      "lazy.ts": [
+        "interface LazyComp<T> {",
+        "  load: () => Promise<T>;",
+        "  key: string;",
+        "}",
+        "function createLazy<T>(",
+        "  key: string,",
+        "  loader: () => Promise<T>",
+        "): LazyComp<T> {",
+        "  return { load: loader, key };",
+        "}",
+        "function Comp(): string {",
+        '  return "hi";',
+        "}",
+        'export const LazyComp = createLazy("k",',
+        "  () => Promise.resolve(Comp));",
+      ].join("\n"),
+    });
+
+    // Force expression fixer path
+    project.languageService.getCombinedCodeFix =
+      () => ({ changes: [] });
+    project.languageService.getCodeFixesAtPosition =
+      () => [];
+
+    const file = resolve(
+      project.getRootDir(),
+      "lazy.ts"
+    );
+
+    const before = project.languageService
+      .getSemanticDiagnostics(file)
+      .filter((d) => d.code === 9010);
+    expect(before.length).toBeGreaterThan(0);
+
+    fix(project);
+
+    const after = project.languageService
+      .getSemanticDiagnostics(file)
+      .filter((d) => d.code === 9010);
+    expect(after).toEqual([]);
+
+    const content = project.getFileContent(file);
+    // Should have inserted a type annotation
+    expect(content).toMatch(
+      /export const LazyComp: .+ = createLazy/
+    );
+
+    // Must not introduce any non-iso errors
+    const allErrors = project.languageService
+      .getSemanticDiagnostics(file)
+      .filter(
+        (d) =>
+          !(
+            d.code >= 9007 && d.code <= 9039
+          )
+      );
+    expect(allErrors).toEqual([]);
+  });
+
+  it("TS9010 handler does not interfere with built-in fixer", () => {
+    // When the built-in fixer can handle TS9010,
+    // the expression fixer should not run (no
+    // remaining diagnostics).
+    const project = makeProject({
+      "simple.ts": [
+        "function getValue(): number {",
+        "  return 42;",
+        "}",
+        "export const x = getValue();",
+      ].join("\n"),
+    });
+
+    const file = resolve(
+      project.getRootDir(),
+      "simple.ts"
+    );
+
+    const before = project.languageService
+      .getSemanticDiagnostics(file)
+      .filter((d) => d.code === 9010);
+    expect(before.length).toBeGreaterThan(0);
+
+    // Run with real (unmocked) fixer
+    const result = fix(project);
+    expect(result.totalChanges).toBeGreaterThan(0);
+
+    const after = project.languageService
+      .getSemanticDiagnostics(file)
+      .filter((d) => d.code === 9010);
+    expect(after).toEqual([]);
+
+    const content = project.getFileContent(file);
+    // Built-in fixer adds `: number`, not our
+    // expression fixer's checker-serialized type
+    expect(content).toContain("x: number");
+  });
+
+  it("TS9010 handles multiple variables in one file", () => {
+    const project = makeProject({
+      "multi.ts": [
+        "interface Box<T> { value: T }",
+        "function box<T>(v: T): Box<T> {",
+        "  return { value: v };",
+        "}",
+        'export const a = box("hello");',
+        "export const b = box(42);",
+      ].join("\n"),
+    });
+
+    project.languageService.getCombinedCodeFix =
+      () => ({ changes: [] });
+    project.languageService.getCodeFixesAtPosition =
+      () => [];
+
+    const file = resolve(
+      project.getRootDir(),
+      "multi.ts"
+    );
+
+    fix(project);
+
+    const after = project.languageService
+      .getSemanticDiagnostics(file)
+      .filter((d) => d.code === 9010);
+    expect(after).toEqual([]);
+
+    const content = project.getFileContent(file);
+    expect(content).toMatch(
+      /export const a: .+ = box\(/
+    );
+    expect(content).toMatch(
+      /export const b: .+ = box\(/
+    );
+  });
 });
