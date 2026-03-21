@@ -644,6 +644,34 @@ function findNodeCoveringSpan(
   return visit(sf);
 }
 
+/** Get the root Identifier of a dotted chain. */
+function getRootIdentifier(
+  node: ts.Node
+): ts.Identifier | undefined {
+  if (ts.isIdentifier(node)) return node;
+  if (ts.isPropertyAccessExpression(node)) {
+    return getRootIdentifier(node.expression);
+  }
+  return undefined;
+}
+
+/**
+ * True when the root identifier of a typeof target
+ * is a destructured binding element.
+ * OXC rejects typeof references to binding elements
+ * with TS9019 even when the variable isn't exported.
+ */
+function refsBindingElement(
+  node: ts.Node,
+  checker: ts.TypeChecker
+): boolean {
+  const root = getRootIdentifier(node);
+  if (!root) return false;
+  const sym = checker.getSymbolAtLocation(root);
+  if (!sym?.valueDeclaration) return false;
+  return ts.isBindingElement(sym.valueDeclaration);
+}
+
 /** True for Identifier or X.Y.Z property chains. */
 function isTypeofTarget(node: ts.Node): boolean {
   if (ts.isIdentifier(node)) return true;
@@ -711,101 +739,27 @@ const EXPR_FIXER_CODES = new Set([
   9010, 9013, 9017, 9037,
 ]);
 
+interface ExpressionFixResult {
+  content: string;
+  /**
+   * Safe fixes only reference existing names
+   * (typeof X, as const) and skip validation.
+   * Unsafe fixes use typeToTypeNode() which may
+   * produce types with unimported names.
+   */
+  safe: boolean;
+}
+
 /**
- * Try to fix a single diagnostic. Returns modified
- * content or null if unfixable.
+ * Serialize a type via the checker and sanitize the
+ * output. Returns null when the type can't be
+ * serialized (private names, cycles, etc).
  */
-function computeExpressionFix(
-  sf: ts.SourceFile,
+function serializeType(
   checker: ts.TypeChecker,
-  d: ts.Diagnostic,
-  content: string,
-  verbose: boolean
+  node: ts.Node,
+  sf: ts.SourceFile
 ): string | null {
-  const pos = d.start!;
-  const end = pos + (d.length ?? 0);
-  const exprText = content.slice(pos, end);
-
-  if (d.code === 9010) {
-    const nameNode = findNodeCoveringSpan(
-      sf,
-      pos,
-      d.length ?? 0
-    );
-    if (!nameNode) {
-      if (verbose) {
-        console.log(
-          `  TS9010 skip: no AST node at ` +
-            `[${pos},${end})`
-        );
-      }
-      return null;
-    }
-    const varDecl = nameNode.parent;
-    if (
-      !ts.isVariableDeclaration(varDecl) ||
-      !varDecl.initializer ||
-      varDecl.type
-    )
-      return null;
-
-    const type = checker.getTypeAtLocation(
-      varDecl.initializer
-    );
-    if (type.flags & ts.TypeFlags.Any) return null;
-
-    const typeNode = checker.typeToTypeNode(
-      type,
-      varDecl,
-      ts.NodeBuilderFlags.NoTruncation
-    );
-    if (!typeNode) {
-      if (verbose) {
-        console.log(
-          `  TS9010 skip: typeToTypeNode ` +
-            `returned null (${exprText})`
-        );
-      }
-      return null;
-    }
-
-    const sanitized = sanitizeTypeNode(typeNode);
-    const typeText = typeAsserPrinter.printNode(
-      ts.EmitHint.Unspecified,
-      sanitized,
-      sf
-    );
-    return (
-      content.slice(0, end) +
-      `: ${typeText}` +
-      content.slice(end)
-    );
-  }
-
-  if (d.code === 9017) {
-    return (
-      content.slice(0, end) +
-      " as const" +
-      content.slice(end)
-    );
-  }
-
-  // TS9013 / TS9037
-  const node = findNodeCoveringSpan(
-    sf,
-    pos,
-    d.length ?? 0
-  );
-  if (!node) return null;
-
-  if (isTypeofTarget(node)) {
-    return (
-      content.slice(0, end) +
-      ` as typeof ${exprText}` +
-      content.slice(end)
-    );
-  }
-
   const type = checker.getTypeAtLocation(node);
   if (type.flags & ts.TypeFlags.Any) return null;
 
@@ -817,16 +771,172 @@ function computeExpressionFix(
   if (!typeNode) return null;
 
   const sanitized = sanitizeTypeNode(typeNode);
-  const typeText = typeAsserPrinter.printNode(
+  return typeAsserPrinter.printNode(
     ts.EmitHint.Unspecified,
     sanitized,
     sf
   );
+}
+
+/** True for `||` or `??` binary expressions. */
+function isFallbackExpr(
+  node: ts.Node
+): node is ts.BinaryExpression {
   return (
-    content.slice(0, pos) +
-    `(${exprText}) as ${typeText}` +
-    content.slice(end)
+    ts.isBinaryExpression(node) &&
+    (node.operatorToken.kind ===
+      ts.SyntaxKind.BarBarToken ||
+      node.operatorToken.kind ===
+        ts.SyntaxKind.QuestionQuestionToken)
   );
+}
+
+/**
+ * Try to fix a single diagnostic. Returns modified
+ * content or null if unfixable.
+ *
+ * Fix strategies by priority:
+ *  TS9010 — insert `: SerializedType` on variable
+ *  TS9017 — append `as const`
+ *  Identifier/dotted name — `as typeof expr`
+ *  X || Y where X is dotted — `as typeof X`
+ *  Complex expression — `(expr) as SerializedType`
+ *
+ * typeof paths skip binding elements (OXC TS9019).
+ */
+function computeExpressionFix(
+  sf: ts.SourceFile,
+  checker: ts.TypeChecker,
+  d: ts.Diagnostic,
+  content: string
+): ExpressionFixResult | null {
+  const pos = d.start!;
+  const end = pos + (d.length ?? 0);
+  const exprText = content.slice(pos, end);
+
+  // TS9010: variable needs `: Type` annotation.
+  if (d.code === 9010) {
+    const nameNode = findNodeCoveringSpan(
+      sf,
+      pos,
+      d.length ?? 0
+    );
+    if (!nameNode) return null;
+    const varDecl = nameNode.parent;
+    if (
+      !ts.isVariableDeclaration(varDecl) ||
+      !varDecl.initializer ||
+      varDecl.type
+    )
+      return null;
+
+    const typeText = serializeType(
+      checker,
+      varDecl.initializer,
+      sf
+    );
+    if (!typeText) return null;
+
+    return {
+      content:
+        content.slice(0, end) +
+        `: ${typeText}` +
+        content.slice(end),
+      safe: false,
+    };
+  }
+
+  // TS9017: array literal → `as const`.
+  if (d.code === 9017) {
+    return {
+      content:
+        content.slice(0, end) +
+        " as const" +
+        content.slice(end),
+      safe: true,
+    };
+  }
+
+  // TS9013 / TS9037: expression needs type.
+  const node = findNodeCoveringSpan(
+    sf,
+    pos,
+    d.length ?? 0
+  );
+  if (!node) return null;
+
+  // Identifier or A.B.C → `as typeof expr`.
+  if (
+    isTypeofTarget(node) &&
+    !refsBindingElement(node, checker)
+  ) {
+    return {
+      content:
+        content.slice(0, end) +
+        ` as typeof ${exprText}` +
+        content.slice(end),
+      safe: true,
+    };
+  }
+
+  // X || Y / X ?? Y where X is a dotted name →
+  // `(expr) as typeof X`.
+  if (
+    isFallbackExpr(node) &&
+    isTypeofTarget(node.left) &&
+    !refsBindingElement(node.left, checker)
+  ) {
+    const leftText = node.left.getText(sf);
+    return {
+      content:
+        content.slice(0, pos) +
+        `(${exprText}) as typeof ${leftText}` +
+        content.slice(end),
+      safe: true,
+    };
+  }
+
+  // Last resort: checker-serialized type assertion.
+  const typeText = serializeType(checker, node, sf);
+  if (!typeText) return null;
+
+  return {
+    content:
+      content.slice(0, pos) +
+      `(${exprText}) as ${typeText}` +
+      content.slice(end),
+    safe: false,
+  };
+}
+
+// ── Expression fixer helpers ─────────────────────
+
+/** Count non-iso errors in a file. */
+function nonIsoErrorCount(
+  ctx: FixContext,
+  fileName: string
+): number {
+  return ctx.project.languageService
+    .getSemanticDiagnostics(fileName)
+    .filter(
+      (d) => !isIsolatedDeclarationsError(d.code)
+    ).length;
+}
+
+/** Record a file as changed by the expression fixer. */
+function recordExprFix(
+  ctx: FixContext,
+  fileName: string,
+  edits: number
+): void {
+  ctx.filesChanged.add(fileName);
+  ctx.filesSkipped.delete(fileName);
+  ctx.totalChanges += edits;
+  ctx.onProgress?.({
+    type: "file",
+    fileName,
+    edits,
+  });
 }
 
 /**
@@ -840,13 +950,6 @@ function fixExpressionValidated(
 ): number {
   let totalFixed = 0;
   let prevCount = -1;
-
-  const nonIsoErrorCount = (): number =>
-    ctx.project.languageService
-      .getSemanticDiagnostics(fileName)
-      .filter(
-        (d) => !isIsolatedDeclarationsError(d.code)
-      ).length;
 
   for (let round = 0; round < 50; round++) {
     const prog =
@@ -872,21 +975,26 @@ function fixExpressionValidated(
     for (const d of diags) {
       const content =
         ctx.project.getFileContent(fileName);
-      const errorsBefore = nonIsoErrorCount();
+      const errorsBefore = nonIsoErrorCount(
+        ctx,
+        fileName
+      );
 
-      const fixed = computeExpressionFix(
+      const fix = computeExpressionFix(
         curSf,
         chk,
         d,
-        content,
-        ctx.verbose
+        content
       );
-      if (!fixed) continue;
+      if (!fix) continue;
 
-      ctx.project.updateFile(fileName, fixed);
-      const errorsAfter = nonIsoErrorCount();
+      ctx.project.updateFile(fileName, fix.content);
 
-      if (errorsAfter > errorsBefore) {
+      if (
+        !fix.safe &&
+        nonIsoErrorCount(ctx, fileName) >
+          errorsBefore
+      ) {
         ctx.project.updateFile(fileName, content);
         continue;
       }
@@ -902,6 +1010,16 @@ function fixExpressionValidated(
   return totalFixed;
 }
 
+/**
+ * Last-resort fixer for iso-decl errors the built-in
+ * TS fixer can't handle. Runs after validation so
+ * its changes survive rollbacks.
+ *
+ * Uses a batch fast-path when all fixes are safe.
+ * Falls back to per-fix validation when any fix
+ * uses typeToTypeNode() (which may produce types
+ * with unimported names).
+ */
 function runExpressionFixer(ctx: FixContext): void {
   const program =
     ctx.project.languageService.getProgram();
@@ -929,81 +1047,62 @@ function runExpressionFixer(ctx: FixContext): void {
       );
     }
 
-    // Fast path: apply all fixes at once.
+    // Batch: apply all fixes at once.
     let content = ctx.project.getFileContent(
       sf.fileName
     );
     let fixed = 0;
+    let allSafe = true;
     const sorted = [...diags].sort(
       (a, b) => b.start! - a.start!
     );
     for (const d of sorted) {
-      const result = computeExpressionFix(
+      const fix = computeExpressionFix(
         sf,
         checker,
         d,
-        content,
-        ctx.verbose
+        content
       );
-      if (result) {
-        content = result;
+      if (fix) {
+        content = fix.content;
+        if (!fix.safe) allSafe = false;
         fixed++;
       }
     }
 
     if (fixed === 0) continue;
 
-    // Validate the batch.
-    const contentBefore =
-      ctx.project.getFileContent(sf.fileName);
-    ctx.project.updateFile(sf.fileName, content);
-
-    const errorsAfter = ctx.project.languageService
-      .getSemanticDiagnostics(sf.fileName)
-      .filter(
-        (d) => !isIsolatedDeclarationsError(d.code)
-      ).length;
-    ctx.project.updateFile(
-      sf.fileName,
-      contentBefore
-    );
-    const errorsBefore =
-      ctx.project.languageService
-        .getSemanticDiagnostics(sf.fileName)
-        .filter(
-          (d) =>
-            !isIsolatedDeclarationsError(d.code)
-        ).length;
-
-    if (errorsAfter <= errorsBefore) {
-      // All good — apply batch.
+    // Safe batch: skip validation entirely.
+    if (allSafe) {
       ctx.project.updateFile(sf.fileName, content);
-      ctx.filesChanged.add(sf.fileName);
-      ctx.filesSkipped.delete(sf.fileName);
-      ctx.totalChanges += fixed;
-      ctx.onProgress?.({
-        type: "file",
-        fileName: sf.fileName,
-        edits: fixed,
-      });
+      recordExprFix(ctx, sf.fileName, fixed);
       continue;
     }
 
-    // Batch introduced errors — fall back to
-    // per-fix validation to keep good fixes.
+    // Unsafe batch: validate before applying.
+    const before = ctx.project.getFileContent(
+      sf.fileName
+    );
+    ctx.project.updateFile(sf.fileName, content);
+    const after = nonIsoErrorCount(ctx, sf.fileName);
+    ctx.project.updateFile(sf.fileName, before);
+
+    if (
+      after <= nonIsoErrorCount(ctx, sf.fileName)
+    ) {
+      ctx.project.updateFile(sf.fileName, content);
+      recordExprFix(ctx, sf.fileName, fixed);
+      continue;
+    }
+
+    // Batch introduced errors — keep only safe
+    // individual fixes via per-fix validation.
     const perFix = fixExpressionValidated(
       ctx,
       sf.fileName
     );
     if (perFix > 0) {
-      ctx.filesChanged.add(sf.fileName);
-      ctx.filesSkipped.delete(sf.fileName);
-      ctx.totalChanges += perFix;
-      ctx.onProgress?.({
-        type: "file",
-        fileName: sf.fileName,
-        edits: perFix,
-      });
+      recordExprFix(ctx, sf.fileName, perFix);
     } else {
       ctx.onProgress?.({
         type: "file-error",
