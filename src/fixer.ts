@@ -874,6 +874,49 @@ function runExpressionFixer(ctx: FixContext): void {
     }
 
     if (fixed > 0) {
+      // Validate: check if fixes introduced
+      // non-iso errors (e.g. unimported types
+      // from typeToTypeNode serialization).
+      const contentBefore =
+        ctx.project.getFileContent(sf.fileName);
+      ctx.project.updateFile(sf.fileName, content);
+      const errorsAfter = ctx.project.languageService
+        .getSemanticDiagnostics(sf.fileName)
+        .filter(
+          (d) => !isIsolatedDeclarationsError(d.code)
+        ).length;
+
+      ctx.project.updateFile(
+        sf.fileName,
+        contentBefore
+      );
+      const errorsBefore =
+        ctx.project.languageService
+          .getSemanticDiagnostics(sf.fileName)
+          .filter(
+            (d) =>
+              !isIsolatedDeclarationsError(d.code)
+          ).length;
+
+      if (errorsAfter > errorsBefore) {
+        // Revert — keep contentBefore
+        const msg =
+          `expression fixer introduced ` +
+          `${errorsAfter - errorsBefore} error(s)`;
+        if (ctx.verbose) {
+          console.log(
+            `  ${sf.fileName}: ${msg}`
+          );
+        }
+        ctx.onProgress?.({
+          type: "file-error",
+          fileName: sf.fileName,
+          message: msg,
+        });
+        continue;
+      }
+
+      // Re-apply the validated content
       ctx.project.updateFile(sf.fileName, content);
       ctx.filesChanged.add(sf.fileName);
       ctx.filesSkipped.delete(sf.fileName);
