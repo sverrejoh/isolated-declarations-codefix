@@ -67,7 +67,6 @@ export function rewriteInlineImportTypes(
   function visit(node: ts.Node): void {
     if (
       ts.isImportTypeNode(node) &&
-      node.isTypeOf &&
       !isInsideTypeLiteral(node)
     ) {
       nodes.push(node);
@@ -160,7 +159,9 @@ export function rewriteInlineImportTypes(
   for (const [spec, nodeList] of bySpec) {
     const alias = aliasMap.get(spec)!;
     for (const node of nodeList) {
-      let replacement = "typeof " + alias;
+      let replacement = node.isTypeOf
+        ? "typeof " + alias
+        : alias;
       if (node.qualifier) {
         replacement += "." + node.qualifier.getText(src);
       }
