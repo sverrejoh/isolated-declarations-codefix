@@ -754,26 +754,58 @@ function runExpressionFixer(ctx: FixContext): void {
           pos,
           d.length ?? 0
         );
-        if (!nameNode) continue;
+        if (!nameNode) {
+          if (ctx.verbose) {
+            console.log(
+              `  TS9010 skip: no AST node at ` +
+                `[${pos},${end}) in ${sf.fileName}`
+            );
+          }
+          continue;
+        }
         const varDecl = nameNode.parent;
         if (
           !ts.isVariableDeclaration(varDecl) ||
           !varDecl.initializer ||
           varDecl.type
-        )
+        ) {
+          if (ctx.verbose) {
+            console.log(
+              `  TS9010 skip: not a bare ` +
+                `variable declaration ` +
+                `(${exprText})`
+            );
+          }
           continue;
+        }
 
         const type = checker.getTypeAtLocation(
           varDecl.initializer
         );
-        if (type.flags & ts.TypeFlags.Any) continue;
+        if (type.flags & ts.TypeFlags.Any) {
+          if (ctx.verbose) {
+            console.log(
+              `  TS9010 skip: type is any ` +
+                `(${exprText})`
+            );
+          }
+          continue;
+        }
 
         const typeNode = checker.typeToTypeNode(
           type,
           varDecl,
           ts.NodeBuilderFlags.NoTruncation
         );
-        if (!typeNode) continue;
+        if (!typeNode) {
+          if (ctx.verbose) {
+            console.log(
+              `  TS9010 skip: typeToTypeNode ` +
+                `returned null (${exprText})`
+            );
+          }
+          continue;
+        }
 
         const sanitized = sanitizeTypeNode(typeNode);
         const typeText =
@@ -1077,7 +1109,6 @@ export function fix(
 
   runCoreFixes(ctx);
   runEnumFixer(ctx);
-  runExpressionFixer(ctx);
 
   const transforms: ReadabilityTransform[] = [
     typeofIntersectionTransform,
@@ -1116,5 +1147,25 @@ export function fix(
   );
 
   runValidation(ctx);
+
+  // Expression fixer runs after validation so its
+  // changes aren't reverted when validation rolls
+  // back bad built-in fixes. Re-run inline-imports
+  // to rewrite any import() types that
+  // typeToTypeNode() generates.
+  const changesBefore = ctx.totalChanges;
+  runExpressionFixer(ctx);
+  if (
+    ctx.rewriteInlineImports &&
+    ctx.totalChanges > changesBefore
+  ) {
+    for (const fn of ctx.filesChanged) {
+      inlineImportsTransform.transformFile(
+        fn,
+        transformCtx
+      );
+    }
+  }
+
   return buildResult(ctx);
 }
