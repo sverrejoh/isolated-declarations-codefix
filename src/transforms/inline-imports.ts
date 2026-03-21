@@ -1,3 +1,4 @@
+import { dirname, isAbsolute, relative } from "node:path";
 import ts from "typescript";
 import type { ProgressEvent } from "../fixer.ts";
 import {
@@ -10,6 +11,23 @@ import type {
   TransformContext,
   TransformOptions,
 } from "./types.ts";
+
+/**
+ * Convert an absolute file path to a relative module
+ * specifier. typeToTypeNode() can emit resolved
+ * absolute paths which must not end up in import
+ * statements.
+ */
+function toRelativeSpecifier(
+  spec: string,
+  fromFile: string
+): string {
+  if (!isAbsolute(spec)) return spec;
+  let rel = relative(dirname(fromFile), spec);
+  rel = rel.replace(/\.(ts|tsx|js|jsx)$/, "");
+  if (!rel.startsWith(".")) rel = "./" + rel;
+  return rel;
+}
 
 function moduleSpecifierToAlias(
   specifier: string
@@ -187,8 +205,9 @@ export function rewriteInlineImportTypes(
   const newImports: string[] = [];
   for (const [spec, alias] of aliasMap) {
     if (existingNs.has(spec)) continue;
+    const rel = toRelativeSpecifier(spec, fileName);
     newImports.push(
-      `import type * as ${alias} from "${spec}";`
+      `import type * as ${alias} from "${rel}";`
     );
   }
 
