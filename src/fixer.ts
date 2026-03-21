@@ -707,6 +707,201 @@ function sanitizeTypeNode(
   return sanitized;
 }
 
+const EXPR_FIXER_CODES = new Set([
+  9010, 9013, 9017, 9037,
+]);
+
+/**
+ * Try to fix a single diagnostic. Returns modified
+ * content or null if unfixable.
+ */
+function computeExpressionFix(
+  sf: ts.SourceFile,
+  checker: ts.TypeChecker,
+  d: ts.Diagnostic,
+  content: string,
+  verbose: boolean
+): string | null {
+  const pos = d.start!;
+  const end = pos + (d.length ?? 0);
+  const exprText = content.slice(pos, end);
+
+  if (d.code === 9010) {
+    const nameNode = findNodeCoveringSpan(
+      sf,
+      pos,
+      d.length ?? 0
+    );
+    if (!nameNode) {
+      if (verbose) {
+        console.log(
+          `  TS9010 skip: no AST node at ` +
+            `[${pos},${end})`
+        );
+      }
+      return null;
+    }
+    const varDecl = nameNode.parent;
+    if (
+      !ts.isVariableDeclaration(varDecl) ||
+      !varDecl.initializer ||
+      varDecl.type
+    )
+      return null;
+
+    const type = checker.getTypeAtLocation(
+      varDecl.initializer
+    );
+    if (type.flags & ts.TypeFlags.Any) return null;
+
+    const typeNode = checker.typeToTypeNode(
+      type,
+      varDecl,
+      ts.NodeBuilderFlags.NoTruncation
+    );
+    if (!typeNode) {
+      if (verbose) {
+        console.log(
+          `  TS9010 skip: typeToTypeNode ` +
+            `returned null (${exprText})`
+        );
+      }
+      return null;
+    }
+
+    const sanitized = sanitizeTypeNode(typeNode);
+    const typeText = typeAsserPrinter.printNode(
+      ts.EmitHint.Unspecified,
+      sanitized,
+      sf
+    );
+    return (
+      content.slice(0, end) +
+      `: ${typeText}` +
+      content.slice(end)
+    );
+  }
+
+  if (d.code === 9017) {
+    return (
+      content.slice(0, end) +
+      " as const" +
+      content.slice(end)
+    );
+  }
+
+  // TS9013 / TS9037
+  const node = findNodeCoveringSpan(
+    sf,
+    pos,
+    d.length ?? 0
+  );
+  if (!node) return null;
+
+  if (isTypeofTarget(node)) {
+    return (
+      content.slice(0, end) +
+      ` as typeof ${exprText}` +
+      content.slice(end)
+    );
+  }
+
+  const type = checker.getTypeAtLocation(node);
+  if (type.flags & ts.TypeFlags.Any) return null;
+
+  const typeNode = checker.typeToTypeNode(
+    type,
+    node,
+    ts.NodeBuilderFlags.NoTruncation
+  );
+  if (!typeNode) return null;
+
+  const sanitized = sanitizeTypeNode(typeNode);
+  const typeText = typeAsserPrinter.printNode(
+    ts.EmitHint.Unspecified,
+    sanitized,
+    sf
+  );
+  return (
+    content.slice(0, pos) +
+    `(${exprText}) as ${typeText}` +
+    content.slice(end)
+  );
+}
+
+/**
+ * Per-fix validated fallback: apply one fix at a
+ * time, keeping only those that don't introduce
+ * non-iso errors.
+ */
+function fixExpressionValidated(
+  ctx: FixContext,
+  fileName: string
+): number {
+  let totalFixed = 0;
+  let prevCount = -1;
+
+  const nonIsoErrorCount = (): number =>
+    ctx.project.languageService
+      .getSemanticDiagnostics(fileName)
+      .filter(
+        (d) => !isIsolatedDeclarationsError(d.code)
+      ).length;
+
+  for (let round = 0; round < 50; round++) {
+    const prog =
+      ctx.project.languageService.getProgram();
+    if (!prog) break;
+    const chk = prog.getTypeChecker();
+    const curSf = prog.getSourceFile(fileName);
+    if (!curSf) break;
+
+    const diags = ctx.project.languageService
+      .getSemanticDiagnostics(fileName)
+      .filter(
+        (d) =>
+          EXPR_FIXER_CODES.has(d.code) &&
+          d.start !== undefined
+      );
+
+    if (diags.length === 0) break;
+    if (diags.length === prevCount) break;
+    prevCount = diags.length;
+
+    let fixedAny = false;
+    for (const d of diags) {
+      const content =
+        ctx.project.getFileContent(fileName);
+      const errorsBefore = nonIsoErrorCount();
+
+      const fixed = computeExpressionFix(
+        curSf,
+        chk,
+        d,
+        content,
+        ctx.verbose
+      );
+      if (!fixed) continue;
+
+      ctx.project.updateFile(fileName, fixed);
+      const errorsAfter = nonIsoErrorCount();
+
+      if (errorsAfter > errorsBefore) {
+        ctx.project.updateFile(fileName, content);
+        continue;
+      }
+
+      totalFixed++;
+      fixedAny = true;
+      break; // re-fetch diags, positions shifted
+    }
+
+    if (!fixedAny) break;
+  }
+
+  return totalFixed;
+}
+
 function runExpressionFixer(ctx: FixContext): void {
   const program =
     ctx.project.languageService.getProgram();
@@ -714,209 +909,74 @@ function runExpressionFixer(ctx: FixContext): void {
   const checker = program.getTypeChecker();
 
   for (const sf of program.getSourceFiles()) {
-    if (sf.fileName.includes("node_modules")) continue;
+    if (sf.fileName.includes("node_modules"))
+      continue;
     if (sf.isDeclarationFile) continue;
 
     const diags = ctx.project.languageService
       .getSemanticDiagnostics(sf.fileName)
       .filter(
         (d) =>
-          (d.code === 9010 ||
-            d.code === 9013 ||
-            d.code === 9017 ||
-            d.code === 9037) &&
+          EXPR_FIXER_CODES.has(d.code) &&
           d.start !== undefined
       );
     if (diags.length === 0) continue;
 
+    if (!ctx.snapshots.has(sf.fileName)) {
+      ctx.snapshots.set(
+        sf.fileName,
+        ctx.project.getFileContent(sf.fileName)
+      );
+    }
+
+    // Fast path: apply all fixes at once.
     let content = ctx.project.getFileContent(
       sf.fileName
     );
-    if (!ctx.snapshots.has(sf.fileName)) {
-      ctx.snapshots.set(sf.fileName, content);
-    }
-
     let fixed = 0;
     const sorted = [...diags].sort(
       (a, b) => b.start! - a.start!
     );
     for (const d of sorted) {
-      const pos = d.start!;
-      const end = pos + (d.length ?? 0);
-      const exprText = content.slice(pos, end);
-
-      // TS9010: variable needs type annotation.
-      // Diagnostic span covers the variable name;
-      // insert `: Type` right after it.
-      if (d.code === 9010) {
-        const nameNode = findNodeCoveringSpan(
-          sf,
-          pos,
-          d.length ?? 0
-        );
-        if (!nameNode) {
-          if (ctx.verbose) {
-            console.log(
-              `  TS9010 skip: no AST node at ` +
-                `[${pos},${end}) in ${sf.fileName}`
-            );
-          }
-          continue;
-        }
-        const varDecl = nameNode.parent;
-        if (
-          !ts.isVariableDeclaration(varDecl) ||
-          !varDecl.initializer ||
-          varDecl.type
-        ) {
-          if (ctx.verbose) {
-            console.log(
-              `  TS9010 skip: not a bare ` +
-                `variable declaration ` +
-                `(${exprText})`
-            );
-          }
-          continue;
-        }
-
-        const type = checker.getTypeAtLocation(
-          varDecl.initializer
-        );
-        if (type.flags & ts.TypeFlags.Any) {
-          if (ctx.verbose) {
-            console.log(
-              `  TS9010 skip: type is any ` +
-                `(${exprText})`
-            );
-          }
-          continue;
-        }
-
-        const typeNode = checker.typeToTypeNode(
-          type,
-          varDecl,
-          ts.NodeBuilderFlags.NoTruncation
-        );
-        if (!typeNode) {
-          if (ctx.verbose) {
-            console.log(
-              `  TS9010 skip: typeToTypeNode ` +
-                `returned null (${exprText})`
-            );
-          }
-          continue;
-        }
-
-        const sanitized = sanitizeTypeNode(typeNode);
-        const typeText =
-          typeAsserPrinter.printNode(
-            ts.EmitHint.Unspecified,
-            sanitized,
-            sf
-          );
-
-        content =
-          content.slice(0, end) +
-          `: ${typeText}` +
-          content.slice(end);
-        fixed++;
-        continue;
-      }
-
-      if (d.code === 9017) {
-        content =
-          content.slice(0, end) +
-          " as const" +
-          content.slice(end);
-        fixed++;
-        continue;
-      }
-
-      // TS9013: find the AST node for the expr
-      const node = findNodeCoveringSpan(
+      const result = computeExpressionFix(
         sf,
-        pos,
-        d.length ?? 0
+        checker,
+        d,
+        content,
+        ctx.verbose
       );
-      if (!node) continue;
-
-      if (isTypeofTarget(node)) {
-        // Identifier or A.B.C → `as typeof expr`
-        content =
-          content.slice(0, end) +
-          ` as typeof ${exprText}` +
-          content.slice(end);
-        fixed++;
-      } else {
-        // Complex expression → checker-serialized type
-        const type = checker.getTypeAtLocation(node);
-        if (type.flags & ts.TypeFlags.Any) continue;
-
-        const typeNode = checker.typeToTypeNode(
-          type,
-          node,
-          ts.NodeBuilderFlags.NoTruncation
-        );
-        if (!typeNode) continue;
-
-        const sanitized = sanitizeTypeNode(typeNode);
-        const typeText = typeAsserPrinter.printNode(
-          ts.EmitHint.Unspecified,
-          sanitized,
-          sf
-        );
-        content =
-          content.slice(0, pos) +
-          `(${exprText}) as ${typeText}` +
-          content.slice(end);
+      if (result) {
+        content = result;
         fixed++;
       }
     }
 
-    if (fixed > 0) {
-      // Validate: check if fixes introduced
-      // non-iso errors (e.g. unimported types
-      // from typeToTypeNode serialization).
-      const contentBefore =
-        ctx.project.getFileContent(sf.fileName);
-      ctx.project.updateFile(sf.fileName, content);
-      const errorsAfter = ctx.project.languageService
+    if (fixed === 0) continue;
+
+    // Validate the batch.
+    const contentBefore =
+      ctx.project.getFileContent(sf.fileName);
+    ctx.project.updateFile(sf.fileName, content);
+
+    const errorsAfter = ctx.project.languageService
+      .getSemanticDiagnostics(sf.fileName)
+      .filter(
+        (d) => !isIsolatedDeclarationsError(d.code)
+      ).length;
+    ctx.project.updateFile(
+      sf.fileName,
+      contentBefore
+    );
+    const errorsBefore =
+      ctx.project.languageService
         .getSemanticDiagnostics(sf.fileName)
         .filter(
-          (d) => !isIsolatedDeclarationsError(d.code)
+          (d) =>
+            !isIsolatedDeclarationsError(d.code)
         ).length;
 
-      ctx.project.updateFile(
-        sf.fileName,
-        contentBefore
-      );
-      const errorsBefore =
-        ctx.project.languageService
-          .getSemanticDiagnostics(sf.fileName)
-          .filter(
-            (d) =>
-              !isIsolatedDeclarationsError(d.code)
-          ).length;
-
-      if (errorsAfter > errorsBefore) {
-        // Revert — keep contentBefore
-        const msg =
-          `expression fixer introduced ` +
-          `${errorsAfter - errorsBefore} error(s)`;
-        if (ctx.verbose) {
-          console.log(
-            `  ${sf.fileName}: ${msg}`
-          );
-        }
-        ctx.onProgress?.({
-          type: "file-error",
-          fileName: sf.fileName,
-          message: msg,
-        });
-        continue;
-      }
-
-      // Re-apply the validated content
+    if (errorsAfter <= errorsBefore) {
+      // All good — apply batch.
       ctx.project.updateFile(sf.fileName, content);
       ctx.filesChanged.add(sf.fileName);
       ctx.filesSkipped.delete(sf.fileName);
@@ -925,6 +985,32 @@ function runExpressionFixer(ctx: FixContext): void {
         type: "file",
         fileName: sf.fileName,
         edits: fixed,
+      });
+      continue;
+    }
+
+    // Batch introduced errors — fall back to
+    // per-fix validation to keep good fixes.
+    const perFix = fixExpressionValidated(
+      ctx,
+      sf.fileName
+    );
+    if (perFix > 0) {
+      ctx.filesChanged.add(sf.fileName);
+      ctx.filesSkipped.delete(sf.fileName);
+      ctx.totalChanges += perFix;
+      ctx.onProgress?.({
+        type: "file",
+        fileName: sf.fileName,
+        edits: perFix,
+      });
+    } else {
+      ctx.onProgress?.({
+        type: "file-error",
+        fileName: sf.fileName,
+        message:
+          "expression fixer: all fixes " +
+          "introduce errors",
       });
     }
   }
