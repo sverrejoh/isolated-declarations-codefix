@@ -62,6 +62,7 @@ export interface FixOptions {
   genericAlias?: boolean;
   stripInnerReturnTypes?: boolean;
   banTypes?: boolean;
+  expandoFix?: boolean;
   onProgress?: (event: ProgressEvent) => void;
 }
 
@@ -79,6 +80,7 @@ interface FixContext {
   genericAlias: boolean;
   stripInnerReturnTypes: boolean;
   banTypes: boolean;
+  expandoFix: boolean;
   onProgress?: (event: ProgressEvent) => void;
   filesChanged: Set<string>;
   filesSkipped: Map<string, string>;
@@ -598,6 +600,286 @@ function runEnumFixer(ctx: FixContext): void {
       });
     }
   }
+}
+
+/**
+ * TS9023: assigning properties to functions without
+ * declaring them. The built-in TS fixer generates
+ * `export declare namespace` which causes TS2300 for
+ * function-typed properties. We use a non-declare
+ * namespace with the initialiser moved inside and
+ * `const` (OXC rejects `var` in namespace exports):
+ *
+ *   handler.version = 1;
+ *   router.get = (path: string) => {};
+ *   →  (delete assignments)
+ *   +  export namespace handler {
+ *        export const version: number = 1;
+ *      }
+ *   +  export namespace router {
+ *        export const get: (path: string) => void
+ *          = (path: string) => {};
+ *      }
+ *
+ * Non-declare namespaces MUST be placed AFTER the
+ * function declaration they merge with (TS2434).
+ * Namespace merge only works with `function`
+ * declarations — `const` arrow functions are skipped.
+ *
+ * Runs after validation so its changes survive
+ * rollbacks of the built-in fix.
+ */
+function runExpandoFixer(ctx: FixContext): void {
+  const program =
+    ctx.project.languageService.getProgram();
+  if (!program) return;
+
+  const checker = program.getTypeChecker();
+  const printer = ts.createPrinter();
+
+  for (const sf of program.getSourceFiles()) {
+    if (sf.fileName.includes("node_modules"))
+      continue;
+    if (sf.isDeclarationFile) continue;
+
+    const diags = ctx.project.languageService
+      .getSemanticDiagnostics(sf.fileName)
+      .filter(
+        (d) =>
+          d.code === 9023 && d.start !== undefined
+      );
+    if (diags.length === 0) continue;
+
+    let content = ctx.project.getFileContent(
+      sf.fileName
+    );
+    if (!ctx.snapshots.has(sf.fileName)) {
+      ctx.snapshots.set(sf.fileName, content);
+    }
+    const src = ts.createSourceFile(
+      sf.fileName,
+      content,
+      ts.ScriptTarget.Latest,
+      true
+    );
+
+    // Collect property assignments grouped by
+    // target function, preserving order.
+    interface PropInfo {
+      prop: string;
+      typeStr: string;
+      initText: string;
+      stmtStart: number;
+      stmtEnd: number;
+    }
+    const groups = new Map<
+      string,
+      { props: PropInfo[]; funcEnd: number }
+    >();
+
+    for (const d of diags) {
+      const assign = findExpandoAssignment(
+        src,
+        d.start!
+      );
+      if (!assign) continue;
+
+      const progSf = program.getSourceFile(
+        sf.fileName
+      );
+      if (!progSf) continue;
+      const progAssign = findExpandoAssignment(
+        progSf,
+        d.start!
+      );
+      if (!progAssign) continue;
+
+      const rawType = checker.getTypeAtLocation(
+        progAssign.right
+      );
+      // Widen literal types ("foo" → string,
+      // 42 → number) to match what tsc emits.
+      const rightType =
+        checker.getBaseTypeOfLiteralType(rawType);
+      const typeNode = checker.typeToTypeNode(
+        rightType,
+        progAssign.stmt,
+        ts.NodeBuilderFlags.NoTruncation
+      );
+      const typeStr = typeNode
+        ? printer.printNode(
+            ts.EmitHint.Unspecified,
+            typeNode,
+            progSf
+          )
+        : "unknown";
+
+      const funcName = assign.funcName;
+      if (!groups.has(funcName)) {
+        // Namespace only merges with function
+        // declarations (not const/let/var).
+        const funcDecl = findFunctionDecl(
+          src,
+          funcName
+        );
+        if (!funcDecl) continue;
+        groups.set(funcName, {
+          props: [],
+          funcEnd: funcDecl.getEnd(),
+        });
+      }
+      groups.get(funcName)!.props.push({
+        prop: assign.propName,
+        typeStr,
+        initText: assign.right.getText(src),
+        stmtStart: assign.stmt.getStart(src),
+        stmtEnd: assign.stmt.getEnd(),
+      });
+    }
+
+    if (groups.size === 0) continue;
+
+    // Build edits: delete original assignments,
+    // remove stale declare namespaces left by the
+    // built-in fixer, and insert our non-declare
+    // namespace after the function declaration.
+    interface Edit {
+      start: number;
+      end: number;
+      replacement: string;
+    }
+    const edits: Edit[] = [];
+    let expandoFixed = 0;
+
+    // Remove existing declare namespace blocks
+    // that the built-in fixer's loop created.
+    for (const stmt of src.statements) {
+      if (
+        ts.isModuleDeclaration(stmt) &&
+        stmt.name &&
+        groups.has(stmt.name.text) &&
+        // Only remove ambient (declare) namespaces
+        // — never remove user-written namespaces.
+        !!(
+          stmt.modifiers?.some(
+            (m) =>
+              m.kind ===
+              ts.SyntaxKind.DeclareKeyword
+          )
+        )
+      ) {
+        let delEnd = stmt.getEnd();
+        if (content[delEnd] === "\n") delEnd++;
+        edits.push({
+          start: stmt.getStart(src),
+          end: delEnd,
+          replacement: "",
+        });
+      }
+    }
+
+    for (const [funcName, group] of groups) {
+      const members = group.props
+        .map(
+          (p) =>
+            `  export const ${p.prop}` +
+            `: ${p.typeStr} = ${p.initText};`
+        )
+        .join("\n");
+      const ns =
+        `\nexport namespace ${funcName} {\n` +
+        members +
+        "\n}\n";
+
+      for (const p of group.props) {
+        let delEnd = p.stmtEnd;
+        if (content[delEnd] === "\n") delEnd++;
+        edits.push({
+          start: p.stmtStart,
+          end: delEnd,
+          replacement: "",
+        });
+        expandoFixed++;
+      }
+
+      // Insert namespace right after the function
+      // declaration (TS2434: must come after).
+      edits.push({
+        start: group.funcEnd,
+        end: group.funcEnd,
+        replacement: ns,
+      });
+    }
+
+    edits.sort((a, b) => b.start - a.start);
+    for (const e of edits) {
+      content =
+        content.slice(0, e.start) +
+        e.replacement +
+        content.slice(e.end);
+    }
+
+    if (expandoFixed > 0) {
+      ctx.project.updateFile(sf.fileName, content);
+      ctx.filesChanged.add(sf.fileName);
+      ctx.filesSkipped.delete(sf.fileName);
+      ctx.totalChanges += expandoFixed;
+      ctx.onProgress?.({
+        type: "file",
+        fileName: sf.fileName,
+        edits: expandoFixed,
+      });
+    }
+  }
+}
+
+/** Find a function declaration by name. */
+function findFunctionDecl(
+  sf: ts.SourceFile,
+  name: string
+): ts.FunctionDeclaration | undefined {
+  for (const stmt of sf.statements) {
+    if (
+      ts.isFunctionDeclaration(stmt) &&
+      stmt.name?.text === name
+    ) {
+      return stmt;
+    }
+  }
+  return undefined;
+}
+
+/** Find the expando assignment at a diagnostic pos. */
+function findExpandoAssignment(
+  sf: ts.SourceFile,
+  pos: number
+): {
+  funcName: string;
+  propName: string;
+  right: ts.Expression;
+  stmt: ts.ExpressionStatement;
+} | null {
+  for (const stmt of sf.statements) {
+    if (!ts.isExpressionStatement(stmt)) continue;
+    const expr = stmt.expression;
+    if (
+      !ts.isBinaryExpression(expr) ||
+      expr.operatorToken.kind !==
+        ts.SyntaxKind.EqualsToken
+    )
+      continue;
+    const left = expr.left;
+    if (!ts.isPropertyAccessExpression(left)) continue;
+    if (left.getStart(sf) !== pos) continue;
+
+    return {
+      funcName: left.expression.getText(sf),
+      propName: left.name.text,
+      right: expr.right,
+      stmt,
+    };
+  }
+  return null;
 }
 
 /**
@@ -1309,6 +1591,7 @@ export function fix(
     genericAlias = true,
     stripInnerReturnTypes = true,
     banTypes = true,
+    expandoFix = true,
     onProgress,
   } = options;
 
@@ -1325,6 +1608,7 @@ export function fix(
     genericAlias,
     stripInnerReturnTypes,
     banTypes,
+    expandoFix,
     onProgress,
     filesChanged: new Set(),
     filesSkipped: new Map(),
@@ -1376,11 +1660,14 @@ export function fix(
 
   runValidation(ctx);
 
-  // Expression fixer runs after validation so its
-  // changes aren't reverted when validation rolls
-  // back bad built-in fixes. Re-run inline-imports
-  // to rewrite any import() types that
-  // typeToTypeNode() generates.
+  // Expando and expression fixers run after
+  // validation so their changes survive rollbacks.
+  if (ctx.expandoFix) {
+    runExpandoFixer(ctx);
+  }
+
+  // Re-run inline-imports to rewrite any import()
+  // types that typeToTypeNode() generates.
   const changesBefore = ctx.totalChanges;
   runExpressionFixer(ctx);
   if (

@@ -19,6 +19,7 @@ interface CliOptions {
   genericAlias: boolean;
   stripInnerReturnTypes: boolean;
   banTypes: boolean;
+  expandoFix: boolean;
 }
 
 function parseArgs(args: string[]): CliOptions {
@@ -37,6 +38,7 @@ function parseArgs(args: string[]): CliOptions {
     genericAlias: true,
     stripInnerReturnTypes: true,
     banTypes: true,
+    expandoFix: true,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -68,6 +70,8 @@ function parseArgs(args: string[]): CliOptions {
       opts.stripInnerReturnTypes = false;
     } else if (arg === "--no-ban-types") {
       opts.banTypes = false;
+    } else if (arg === "--no-expando-fix") {
+      opts.expandoFix = false;
     } else if (arg === "--extract-threshold") {
       opts.extractThreshold = parseInt(args[++i], 10);
     } else if (arg === "--help" || arg === "-h") {
@@ -106,6 +110,7 @@ Options:
   --no-strip-inner-return-types
                         Keep inner callback return types
   --no-ban-types        Keep {} type literals as-is
+  --no-expando-fix      Skip TS9023 expando function fix
   --extract-threshold <n>
                         Extract inline types with more than
                         n members to interfaces (default: 5)
@@ -139,6 +144,7 @@ export function main(): void {
     genericAlias: opts.genericAlias,
     stripInnerReturnTypes: opts.stripInnerReturnTypes,
     banTypes: opts.banTypes,
+    expandoFix: opts.expandoFix,
     onProgress: (e) => {
       if (e.type === "file-scanned") {
         renderer.onFileScanned(e.fileName);
