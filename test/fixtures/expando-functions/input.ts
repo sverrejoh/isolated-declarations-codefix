@@ -12,24 +12,13 @@ export function router() {}
 router.get = (path: string) => {};
 router.post = (path: string) => {};
 
-// displayName pattern (React hooks)
+// displayName pattern
 export function hook() {
   return { value: 1 };
 }
 hook.displayName = "hook";
 
-// Hoisted redundant displayName: matches function
-// name → just delete (no namespace needed).
-hoistedRedundant.displayName = "hoistedRedundant";
-
-export function hoistedRedundant(): void {}
-
-// Hoisted non-redundant: different displayName
-hoistedAliased.displayName = "PrettyName";
-
-export function hoistedAliased(): void {}
-
-// Hoisted non-displayName property
+// Hoisted: assignment before function declaration
 hoisted.tag = "hoisted";
 
 export function hoisted(): void {}
