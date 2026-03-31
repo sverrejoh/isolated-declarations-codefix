@@ -671,6 +671,7 @@ function runExpandoFixer(ctx: FixContext): void {
       initText: string;
       stmtStart: number;
       stmtEnd: number;
+      redundant: boolean;
     }
     const groups = new Map<
       string,
@@ -728,12 +729,22 @@ function runExpandoFixer(ctx: FixContext): void {
           funcEnd: funcDecl.getEnd(),
         });
       }
+      // Detect redundant .displayName that matches
+      // the function name — can be safely deleted
+      // (React falls back to Function.name).
+      const initText = assign.right.getText(src);
+      const isRedundantDisplayName =
+        assign.propName === "displayName" &&
+        (initText === `"${funcName}"` ||
+          initText === `'${funcName}'`);
+
       groups.get(funcName)!.props.push({
         prop: assign.propName,
         typeStr,
-        initText: assign.right.getText(src),
+        initText,
         stmtStart: assign.stmt.getStart(src),
         stmtEnd: assign.stmt.getEnd(),
+        redundant: isRedundantDisplayName,
       });
     }
 
@@ -779,18 +790,7 @@ function runExpandoFixer(ctx: FixContext): void {
     }
 
     for (const [funcName, group] of groups) {
-      const members = group.props
-        .map(
-          (p) =>
-            `  export const ${p.prop}` +
-            `: ${p.typeStr} = ${p.initText};`
-        )
-        .join("\n");
-      const ns =
-        `\nexport namespace ${funcName} {\n` +
-        members +
-        "\n}\n";
-
+      // Delete all assignment statements.
       for (const p of group.props) {
         let delEnd = p.stmtEnd;
         if (content[delEnd] === "\n") delEnd++;
@@ -801,6 +801,27 @@ function runExpandoFixer(ctx: FixContext): void {
         });
         expandoFixed++;
       }
+
+      // Redundant props (e.g. displayName matching
+      // function name) are just deleted — no
+      // namespace needed. Only build a namespace
+      // for non-redundant properties.
+      const kept = group.props.filter(
+        (p) => !p.redundant
+      );
+      if (kept.length === 0) continue;
+
+      const members = kept
+        .map(
+          (p) =>
+            `  export const ${p.prop}` +
+            `: ${p.typeStr} = ${p.initText};`
+        )
+        .join("\n");
+      const ns =
+        `\nexport namespace ${funcName} {\n` +
+        members +
+        "\n}\n";
 
       // Insert namespace right after the function
       // declaration (TS2434: must come after).

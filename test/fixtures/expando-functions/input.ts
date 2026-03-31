@@ -18,11 +18,18 @@ export function hook() {
 }
 hook.displayName = "hook";
 
-// Hoisted: assignment before function declaration
-// (uses function hoisting). Declare namespace can't
-// fix this — TS9023 persists when assignment is
-// before the function. Our fixer deletes the
-// assignment and inserts namespace after the function.
+// Hoisted redundant displayName: matches function
+// name → just delete (no namespace needed).
+hoistedRedundant.displayName = "hoistedRedundant";
+
+export function hoistedRedundant(): void {}
+
+// Hoisted non-redundant: different displayName
+hoistedAliased.displayName = "PrettyName";
+
+export function hoistedAliased(): void {}
+
+// Hoisted non-displayName property
 hoisted.tag = "hoisted";
 
 export function hoisted(): void {}

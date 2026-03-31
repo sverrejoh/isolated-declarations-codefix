@@ -42,9 +42,6 @@ describe("expando-functions", () => {
     expect(f).toBeDefined();
     const content = t.project.getFileContent(f!);
 
-    // router.get/post should be in a non-declare
-    // namespace (function values cause TS2300 with
-    // declare namespace).
     expect(content).toContain("namespace router");
     expect(content).not.toContain("router.get =");
     expect(content).not.toContain("router.post =");
@@ -58,12 +55,11 @@ describe("expando-functions", () => {
     expect(f).toBeDefined();
     const content = t.project.getFileContent(f!);
 
-    // OXC rejects export var in namespace
     expect(content).toContain("export const get");
     expect(content).toContain("export const post");
   });
 
-  it("widens literal types", () => {
+  it("deletes redundant hoisted displayName", () => {
     const t = fixFixture("expando-functions");
     const f = [...t.result.filesChanged].find((p) =>
       p.endsWith("input.ts")
@@ -71,12 +67,35 @@ describe("expando-functions", () => {
     expect(f).toBeDefined();
     const content = t.project.getFileContent(f!);
 
-    // Type should be "string" not '"hook"'
+    // hoistedRedundant.displayName =
+    // "hoistedRedundant" is redundant (matches
+    // function name) → deleted, no namespace.
+    expect(content).not.toContain(
+      'hoistedRedundant.displayName'
+    );
+    expect(content).not.toContain(
+      "namespace hoistedRedundant"
+    );
+  });
+
+  it("keeps non-redundant hoisted displayName", () => {
+    const t = fixFixture("expando-functions");
+    const f = [...t.result.filesChanged].find((p) =>
+      p.endsWith("input.ts")
+    );
+    expect(f).toBeDefined();
+    const content = t.project.getFileContent(f!);
+
+    // hoistedAliased.displayName = "PrettyName"
+    // is NOT redundant → namespace with widened type
+    expect(content).toContain(
+      "namespace hoistedAliased"
+    );
     expect(content).toContain(
       "displayName: string"
     );
     expect(content).not.toContain(
-      'displayName: "hook"'
+      'hoistedAliased.displayName ='
     );
   });
 
@@ -88,17 +107,14 @@ describe("expando-functions", () => {
     expect(f).toBeDefined();
     const content = t.project.getFileContent(f!);
 
-    // The assignment `hoisted.tag = "hoisted"`
-    // should be deleted.
     expect(content).not.toContain(
       'hoisted.tag = "hoisted"'
     );
-    // Namespace should be after function declaration
     const funcIdx = content.indexOf(
-      "function hoisted()"
+      "function hoisted():"
     );
     const nsIdx = content.indexOf(
-      "namespace hoisted"
+      "namespace hoisted {"
     );
     expect(funcIdx).toBeGreaterThan(-1);
     expect(nsIdx).toBeGreaterThan(funcIdx);
@@ -112,12 +128,11 @@ describe("expando-functions", () => {
     expect(f).toBeDefined();
     const content = t.project.getFileContent(f!);
 
-    // Built-in fixer loops and creates duplicate
-    // declare namespace blocks for the hoisted
-    // case. Our fixer should remove them.
+    // Built-in fixer loops for hoisted assignments,
+    // creating duplicate declare namespace blocks.
     const declareNsCount = (
       content.match(
-        /declare namespace hoisted/g
+        /declare namespace hoisted\b/g
       ) ?? []
     ).length;
     expect(declareNsCount).toBe(0);
