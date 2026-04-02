@@ -29,18 +29,18 @@ describe("extract-types", () => {
     expect(errors).toEqual([]);
   });
 
-  it("extracts large inline types to interfaces", () => {
+  it("extracts large inline types to type aliases", () => {
     const t = fixFixture("extract-types");
     const content = t.project.getFileContent(
       [...t.result.filesChanged][0],
     );
-    // Should have interface declarations for large types
-    expect(content).toContain("interface ConfigInterface");
-    expect(content).toContain("interface CreateUserInterface");
-    expect(content).toContain("interface GetUserInterface");
-    expect(content).toContain("interface BuildResponseInterface");
-    // Inline types should be replaced with interface names
-    expect(content).toMatch(/export const config: ConfigInterface/);
+    // Should have type alias declarations for large types
+    expect(content).toContain("type ConfigType = {");
+    expect(content).toContain("type CreateUserType = {");
+    expect(content).toContain("type GetUserType = {");
+    expect(content).toContain("type BuildResponseType = {");
+    // Inline types should be replaced with type alias names
+    expect(content).toMatch(/export const config: ConfigType/);
   });
 
   it("does not extract small types", () => {
@@ -49,8 +49,8 @@ describe("extract-types", () => {
       [...t.result.filesChanged][0],
     );
     // getPoint returns { x: number; y: number; z: number } — only 3 members
-    // Should NOT have a GetPointInterface
-    expect(content).not.toContain("GetPointInterface");
+    // Should NOT have a GetPointType
+    expect(content).not.toContain("GetPointType");
     // The inline type should remain
     expect(content).toMatch(/getPoint\(\).*\{/);
   });

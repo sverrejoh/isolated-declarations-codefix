@@ -113,7 +113,7 @@ Options:
   --no-expando-fix      Skip TS9023 expando function fix
   --extract-threshold <n>
                         Extract inline types with more than
-                        n members to interfaces (default: 5)
+                        n members to type aliases (default: 5)
   -h, --help            Show this help message
 `);
 }

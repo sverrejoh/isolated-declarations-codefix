@@ -2,7 +2,7 @@ import ts from "typescript";
 import { dirname, relative } from "node:path";
 
 export interface Extraction {
-  /** Name for the extracted interface */
+  /** Name for the extracted type */
   name: string;
   /** The text of the type literal (e.g. `{ a: string; b: number }`) */
   literalText: string;
@@ -15,7 +15,7 @@ export interface Extraction {
 export interface ExtractionResult {
   /** Extractions to apply, sorted by start position */
   extractions: Extraction[];
-  /** Position to insert interface declarations */
+  /** Position to insert type declarations */
   insertPos: number;
 }
 
@@ -58,7 +58,7 @@ const DEFAULT_THRESHOLD = 5;
 
 /**
  * Analyze a source file for inline type literals that should be
- * extracted to named interfaces.
+ * extracted to named type aliases.
  */
 export function analyzeExtractions(
   sourceText: string,
@@ -86,13 +86,13 @@ export function analyzeExtractions(
     ) {
       const declName = findEnclosingDeclarationName(node);
       if (declName) {
-        const interfaceName = deduplicateName(
-          toPascalCase(declName) + "Interface",
+        const typeName = deduplicateName(
+          toPascalCase(declName) + "Type",
           usedNames,
         );
-        usedNames.add(interfaceName);
+        usedNames.add(typeName);
         extractions.push({
-          name: interfaceName,
+          name: typeName,
           literalText: sourceText.slice(node.getStart(sourceFile), node.getEnd()),
           start: node.getStart(sourceFile),
           end: node.getEnd(),
@@ -112,7 +112,7 @@ export function analyzeExtractions(
 
 /**
  * Apply extractions to the source text: replace inline types with
- * interface names and insert interface declarations.
+ * type names and insert type declarations.
  */
 export function applyExtractions(
   sourceText: string,
@@ -133,15 +133,15 @@ export function applyExtractions(
       text.slice(ext.end);
   }
 
-  // Build interface declarations
-  const interfaces = result.extractions
-    .map((ext) => `interface ${ext.name} ${ext.literalText}`)
+  // Build type declarations
+  const types = result.extractions
+    .map((ext) => `type ${ext.name} = ${ext.literalText}`)
     .join("\n");
 
   // Insert at the insertion point (after imports)
   const before = text.slice(0, result.insertPos);
   const after = text.slice(result.insertPos);
-  text = before + interfaces + "\n" + after;
+  text = before + "\n" + types + "\n" + after;
 
   return text;
 }
@@ -308,7 +308,7 @@ function toPascalCase(name: string): string {
 }
 
 /**
- * Deduplicate an interface name by appending numeric suffixes.
+ * Deduplicate a type name by appending numeric suffixes.
  */
 function deduplicateName(name: string, existing: Set<string>): string {
   if (!existing.has(name)) return name;
@@ -420,17 +420,17 @@ export function analyzeExtractionsWithMetadata(
     ) {
       const declName = findEnclosingDeclarationName(node);
       if (declName) {
-        const interfaceName = deduplicateName(
-          toPascalCase(declName) + "Interface",
+        const typeName = deduplicateName(
+          toPascalCase(declName) + "Type",
           usedNames,
         );
-        usedNames.add(interfaceName);
+        usedNames.add(typeName);
         const literalText = sourceText.slice(
           node.getStart(sourceFile),
           node.getEnd(),
         );
         extractions.push({
-          name: interfaceName,
+          name: typeName,
           literalText,
           start: node.getStart(sourceFile),
           end: node.getEnd(),
@@ -504,7 +504,7 @@ export function planCrossFileExtractions(
     const fileSet = new Set(group.map((e) => e.fileName));
 
     if (fileSet.size === 1) {
-      // Single-file type → local interface
+      // Single-file type → local type alias
       const canonical = pickCanonicalSource(group);
       const action = actions.get(canonical.fileName)!;
       for (const ext of group) {
@@ -555,7 +555,7 @@ export function planCrossFileExtractions(
 
 /**
  * Apply cross-file extraction actions to a single file.
- * Replaces inline types, inserts interfaces, adds imports.
+ * Replaces inline types, inserts type aliases, adds imports.
  */
 export function applyCrossFileExtractions(
   sourceText: string,
@@ -595,22 +595,22 @@ export function applyCrossFileExtractions(
     edits.push({ pos: ext.start, end: ext.end, text: ext.name });
   }
 
-  // 2. Interface declarations
+  // 2. Type declarations
   const seenNames = new Set<string>();
-  const interfaceDecls: string[] = [];
+  const typeDecls: string[] = [];
   for (const ext of action.exportedExtractions) {
     if (!seenNames.has(ext.name)) {
       seenNames.add(ext.name);
-      interfaceDecls.push(
-        `export interface ${ext.name} ${ext.literalText}`,
+      typeDecls.push(
+        `export type ${ext.name} = ${ext.literalText}`,
       );
     }
   }
   for (const ext of action.localExtractions) {
     if (!seenNames.has(ext.name)) {
       seenNames.add(ext.name);
-      interfaceDecls.push(
-        `interface ${ext.name} ${ext.literalText}`,
+      typeDecls.push(
+        `type ${ext.name} = ${ext.literalText}`,
       );
     }
   }
@@ -666,13 +666,13 @@ export function applyCrossFileExtractions(
   // 4. Build the insert block at insertPos
   const insertBlock = [
     ...newImportLines,
-    ...interfaceDecls,
+    ...typeDecls,
   ];
   if (insertBlock.length > 0) {
     edits.push({
       pos: action.insertPos,
       end: action.insertPos,
-      text: insertBlock.join("\n") + "\n",
+      text: "\n" + insertBlock.join("\n") + "\n",
     });
   }
 

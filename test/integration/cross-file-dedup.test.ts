@@ -29,14 +29,14 @@ describe("cross-file-dedup", () => {
     expect(errors).toEqual([]);
   });
 
-  it("exports interface from canonical source file", () => {
+  it("exports type from canonical source file", () => {
     const t = fixFixture("cross-file-dedup");
     const sourceFile = [...t.result.filesChanged].find((f) =>
       f.endsWith("source.ts"),
     );
     expect(sourceFile).toBeDefined();
     const content = t.project.getFileContent(sourceFile!);
-    expect(content).toMatch(/export interface \w+Interface/);
+    expect(content).toMatch(/export type \w+Type =/);
   });
 
   it("consumers import the type instead of duplicating", () => {
@@ -47,26 +47,26 @@ describe("cross-file-dedup", () => {
         fileName.endsWith("consumer-b.ts")
       ) {
         const content = t.project.getFileContent(fileName);
-        // Should reference the interface name, not have a local interface declaration
-        expect(content).toMatch(/\w+Interface/);
+        // Should reference the type name, not have a local type declaration
+        expect(content).toMatch(/\w+Type/);
         expect(content).not.toMatch(
-          /^(?:export )?interface \w+Interface/m,
+          /^(?:export )?type \w+Type =/m,
         );
       }
     }
   });
 
-  it("local-only types get local non-exported interfaces", () => {
+  it("local-only types get local non-exported type aliases", () => {
     const t = fixFixture("cross-file-dedup");
     const localFile = [...t.result.filesChanged].find((f) =>
       f.endsWith("local-only.ts"),
     );
     expect(localFile).toBeDefined();
     const content = t.project.getFileContent(localFile!);
-    // Should have a local interface (not exported)
-    expect(content).toMatch(/^interface \w+Interface/m);
+    // Should have a local type alias (not exported)
+    expect(content).toMatch(/^type \w+Type =/m);
     expect(content).not.toMatch(
-      /^export interface \w+Interface/m,
+      /^export type \w+Type =/m,
     );
   });
 });

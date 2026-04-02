@@ -15,7 +15,7 @@ describe("analyzeExtractions", () => {
     const source = `export const x: { a: string; b: string; c: string; d: string; e: string; f: string } = getX();`;
     const result = analyzeExtractions(source, "test.ts");
     expect(result.extractions.length).toBe(1);
-    expect(result.extractions[0].name).toBe("XInterface");
+    expect(result.extractions[0].name).toBe("XType");
   });
 
   it("skips type literals with <=5 members", () => {
@@ -36,37 +36,37 @@ describe("analyzeExtractions", () => {
     expect(result.extractions.length).toBe(0);
   });
 
-  it("names variables as PascalCase + Interface", () => {
+  it("names variables as PascalCase + Type", () => {
     const source = `export const myConfig: { a: string; b: string; c: string; d: string; e: string; f: string } = getX();`;
     const result = analyzeExtractions(source, "test.ts");
-    expect(result.extractions[0].name).toBe("MyConfigInterface");
+    expect(result.extractions[0].name).toBe("MyConfigType");
   });
 
-  it("names function returns as PascalCase + Interface", () => {
+  it("names function returns as PascalCase + Type", () => {
     const source = `export function createUser(): { a: string; b: string; c: string; d: string; e: string; f: string } { return {} as any; }`;
     const result = analyzeExtractions(source, "test.ts");
-    expect(result.extractions[0].name).toBe("CreateUserInterface");
+    expect(result.extractions[0].name).toBe("CreateUserType");
   });
 
   it("names arrow function returns from variable name", () => {
     const source = `export const getSettings: () => { a: string; b: string; c: string; d: string; e: string; f: string } = () => ({} as any);`;
     const result = analyzeExtractions(source, "test.ts");
-    expect(result.extractions[0].name).toBe("GetSettingsInterface");
+    expect(result.extractions[0].name).toBe("GetSettingsType");
   });
 
   it("names parameter types from parameter name", () => {
     const source = `export function foo(options: { a: string; b: string; c: string; d: string; e: string; f: string }): void {}`;
     const result = analyzeExtractions(source, "test.ts");
-    expect(result.extractions[0].name).toBe("OptionsInterface");
+    expect(result.extractions[0].name).toBe("OptionsType");
   });
 
   it("deduplicates names with numeric suffix", () => {
     const source = [
-      `interface XInterface {}`,
+      `interface XType {}`,
       `export const x: { a: string; b: string; c: string; d: string; e: string; f: string } = getX();`,
     ].join("\n");
     const result = analyzeExtractions(source, "test.ts");
-    expect(result.extractions[0].name).toBe("XInterface2");
+    expect(result.extractions[0].name).toBe("XType2");
   });
 
   it("handles multiple extractions in one file", () => {
@@ -76,8 +76,8 @@ describe("analyzeExtractions", () => {
     ].join("\n");
     const result = analyzeExtractions(source, "test.ts");
     expect(result.extractions.length).toBe(2);
-    expect(result.extractions[0].name).toBe("AInterface");
-    expect(result.extractions[1].name).toBe("BInterface");
+    expect(result.extractions[0].name).toBe("AType");
+    expect(result.extractions[1].name).toBe("BType");
   });
 
   it("skips type literals nested in other type literals", () => {
@@ -85,17 +85,17 @@ describe("analyzeExtractions", () => {
     const result = analyzeExtractions(source, "test.ts");
     // Only the outer type literal should be extracted, not the inner one
     expect(result.extractions.length).toBe(1);
-    expect(result.extractions[0].name).toBe("XInterface");
+    expect(result.extractions[0].name).toBe("XType");
   });
 });
 
 describe("applyExtractions", () => {
-  it("replaces inline types and inserts interfaces", () => {
+  it("replaces inline types and inserts type aliases", () => {
     const source = `export const config: { a: string; b: string; c: string; d: string; e: string; f: string } = getConfig();`;
     const result = analyzeExtractions(source, "test.ts");
     const output = applyExtractions(source, result);
-    expect(output).toContain("interface ConfigInterface {");
-    expect(output).toContain("export const config: ConfigInterface = getConfig();");
+    expect(output).toContain("type ConfigType = {");
+    expect(output).toContain("export const config: ConfigType = getConfig();");
   });
 
   it("returns source unchanged when no extractions", () => {
@@ -105,7 +105,7 @@ describe("applyExtractions", () => {
     expect(output).toBe(source);
   });
 
-  it("inserts interfaces after imports", () => {
+  it("inserts type aliases after imports", () => {
     const source = [
       `import { foo } from "./foo";`,
       `export const config: { a: string; b: string; c: string; d: string; e: string; f: string } = getConfig();`,
@@ -113,10 +113,11 @@ describe("applyExtractions", () => {
     const result = analyzeExtractions(source, "test.ts");
     const output = applyExtractions(source, result);
     const lines = output.split("\n");
-    // First line should be import, then interface, then export
+    // First line should be import, then blank line, then type alias, then export
     expect(lines[0]).toContain("import");
-    expect(lines[1]).toContain("interface ConfigInterface");
-    expect(lines[2]).toContain("export const config: ConfigInterface");
+    expect(lines[1]).toBe("");
+    expect(lines[2]).toContain("type ConfigType =");
+    expect(lines[3]).toContain("export const config: ConfigType");
   });
 
   it("handles multiple extractions correctly", () => {
@@ -126,10 +127,10 @@ describe("applyExtractions", () => {
     ].join("\n");
     const result = analyzeExtractions(source, "test.ts");
     const output = applyExtractions(source, result);
-    expect(output).toContain("interface AInterface");
-    expect(output).toContain("interface BInterface");
-    expect(output).toContain("export const a: AInterface");
-    expect(output).toContain("export const b: BInterface");
+    expect(output).toContain("type AType =");
+    expect(output).toContain("type BType =");
+    expect(output).toContain("export const a: AType");
+    expect(output).toContain("export const b: BType");
   });
 });
 
@@ -239,7 +240,7 @@ describe("planCrossFileExtractions", () => {
 });
 
 describe("applyCrossFileExtractions", () => {
-  it("inserts export interface for canonical source", () => {
+  it("inserts export type for canonical source", () => {
     const source = `export function createConfig(): { host: string; port: number; debug: boolean; timeout: number; retries: number; logLevel: string } { return {} as any; }`;
     const analysis = analyzeExtractionsWithMetadata(
       source,
@@ -259,9 +260,9 @@ describe("applyCrossFileExtractions", () => {
       importedExtractions: [],
       insertPos: analysis.insertPos,
     });
-    expect(output).toContain("export interface CreateConfigInterface {");
+    expect(output).toContain("export type CreateConfigType = {");
     expect(output).toContain(
-      "export function createConfig(): CreateConfigInterface",
+      "export function createConfig(): CreateConfigType",
     );
   });
 
@@ -280,7 +281,7 @@ describe("applyCrossFileExtractions", () => {
         exportedExtractions: [],
         importedExtractions: [
           {
-            name: "CreateConfigInterface",
+            name: "CreateConfigType",
             sourceFileName: "/src/source.ts",
             start: ext.start,
             end: ext.end,
@@ -289,9 +290,9 @@ describe("applyCrossFileExtractions", () => {
         insertPos: analysis.insertPos,
       },
     );
-    expect(output).toContain("CreateConfigInterface");
+    expect(output).toContain("CreateConfigType");
     expect(output).toContain(
-      "export const config: CreateConfigInterface = createConfig();",
+      "export const config: CreateConfigType = createConfig();",
     );
   });
 
@@ -310,7 +311,7 @@ describe("applyCrossFileExtractions", () => {
         exportedExtractions: [],
         importedExtractions: [
           {
-            name: "CreateConfigInterface",
+            name: "CreateConfigType",
             sourceFileName: "/src/source.ts",
             start: ext.start,
             end: ext.end,
@@ -321,7 +322,7 @@ describe("applyCrossFileExtractions", () => {
     );
     // Should merge into existing import
     expect(output).toContain(
-      "import { createConfig, type CreateConfigInterface } from",
+      "import { createConfig, type CreateConfigType } from",
     );
     // Should NOT have a separate import type line
     expect(output).not.toMatch(/^import type/m);
