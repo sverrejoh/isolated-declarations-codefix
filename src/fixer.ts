@@ -1129,8 +1129,29 @@ function computeExpressionFix(
     };
   }
 
-  // TS9017: array literal → `as const`.
+  // TS9017: array literal needs explicit type.
+  // Prefer a checker-serialized type over `as const` to avoid
+  // producing `readonly` tuple types that break assignments where
+  // a mutable `string[]` (or similar) is expected.
   if (d.code === 9017) {
+    const node = findNodeCoveringSpan(
+      sf,
+      pos,
+      d.length ?? 0
+    );
+    if (node) {
+      const typeText = serializeType(checker, node, sf);
+      if (typeText) {
+        return {
+          content:
+            content.slice(0, pos) +
+            `(${exprText}) as ${typeText}` +
+            content.slice(end),
+          safe: false,
+        };
+      }
+    }
+    // Fallback: `as const` (may produce a readonly tuple type).
     return {
       content:
         content.slice(0, end) +
