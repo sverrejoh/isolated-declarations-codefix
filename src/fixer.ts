@@ -15,6 +15,7 @@ import { collapseUnionsTransform } from "./transforms/collapse-unions.ts";
 import { genericAliasTransform } from "./transforms/generic-alias.ts";
 import { stripInnerReturnTypesTransform } from "./transforms/strip-inner-return-types.ts";
 import { banTypesTransform } from "./transforms/ban-types.ts";
+import { jestMockTransform } from "./transforms/jest-mock.ts";
 import type { Project } from "./project.ts";
 
 const FIX_ID = "fixMissingTypeAnnotationOnExports";
@@ -62,6 +63,7 @@ export interface FixOptions {
   genericAlias?: boolean;
   stripInnerReturnTypes?: boolean;
   banTypes?: boolean;
+  jestMock?: boolean;
   expandoFix?: boolean;
   onProgress?: (event: ProgressEvent) => void;
 }
@@ -80,6 +82,7 @@ interface FixContext {
   genericAlias: boolean;
   stripInnerReturnTypes: boolean;
   banTypes: boolean;
+  jestMock: boolean;
   expandoFix: boolean;
   onProgress?: (event: ProgressEvent) => void;
   filesChanged: Set<string>;
@@ -95,9 +98,7 @@ function findEnumMemberAt(
   sourceFile: ts.SourceFile,
   pos: number
 ): ts.EnumMember | undefined {
-  function visit(
-    node: ts.Node
-  ): ts.EnumMember | undefined {
+  function visit(node: ts.Node): ts.EnumMember | undefined {
     if (
       ts.isEnumMember(node) &&
       node.getStart(sourceFile) <= pos &&
@@ -131,9 +132,7 @@ function fixFileFallback(
     const diags = project.languageService
       .getSemanticDiagnostics(fileName)
       .filter(
-        (d) =>
-          isIsolatedDeclarationsError(d.code) &&
-          d.start !== undefined
+        (d) => isIsolatedDeclarationsError(d.code) && d.start !== undefined
       );
 
     if (diags.length === 0) break;
@@ -147,22 +146,19 @@ function fixFileFallback(
 
       let fixes: readonly ts.CodeFixAction[];
       try {
-        fixes =
-          project.languageService.getCodeFixesAtPosition(
-            fileName,
-            start,
-            end,
-            [d.code],
-            formatOptions,
-            preferences
-          );
+        fixes = project.languageService.getCodeFixesAtPosition(
+          fileName,
+          start,
+          end,
+          [d.code],
+          formatOptions,
+          preferences
+        );
       } catch {
         continue;
       }
 
-      const action =
-        fixes.find((f) => f.fixId === FIX_ID) ??
-        fixes[0];
+      const action = fixes.find((f) => f.fixId === FIX_ID) ?? fixes[0];
       if (!action || action.changes.length === 0) {
         continue;
       }
@@ -170,16 +166,11 @@ function fixFileFallback(
       let applied = false;
       for (const fc of action.changes) {
         if (fc.textChanges.length === 0) continue;
-        const current = project.getFileContent(
-          fc.fileName
-        );
+        const current = project.getFileContent(fc.fileName);
         if (snapshots && !snapshots.has(fc.fileName)) {
           snapshots.set(fc.fileName, current);
         }
-        const updated = applyTextChanges(
-          current,
-          fc.textChanges
-        );
+        const updated = applyTextChanges(current, fc.textChanges);
         project.updateFile(fc.fileName, updated);
         totalEdits += fc.textChanges.length;
         applied = true;
@@ -215,17 +206,13 @@ function fixFileValidated(
   const nonIsoErrorCount = (): number =>
     project.languageService
       .getSemanticDiagnostics(fileName)
-      .filter(
-        (d) => !isIsolatedDeclarationsError(d.code)
-      ).length;
+      .filter((d) => !isIsolatedDeclarationsError(d.code)).length;
 
   for (let round = 0; round < 50; round++) {
     const diags = project.languageService
       .getSemanticDiagnostics(fileName)
       .filter(
-        (d) =>
-          isIsolatedDeclarationsError(d.code) &&
-          d.start !== undefined
+        (d) => isIsolatedDeclarationsError(d.code) && d.start !== undefined
       );
 
     if (diags.length === 0) break;
@@ -239,32 +226,26 @@ function fixFileValidated(
 
       let fixes: readonly ts.CodeFixAction[];
       try {
-        fixes =
-          project.languageService.getCodeFixesAtPosition(
-            fileName,
-            start,
-            end,
-            [d.code],
-            formatOptions,
-            preferences
-          );
+        fixes = project.languageService.getCodeFixesAtPosition(
+          fileName,
+          start,
+          end,
+          [d.code],
+          formatOptions,
+          preferences
+        );
       } catch {
         continue;
       }
 
-      const action =
-        fixes.find((f) => f.fixId === FIX_ID) ??
-        fixes[0];
+      const action = fixes.find((f) => f.fixId === FIX_ID) ?? fixes[0];
       if (!action || action.changes.length === 0) {
         continue;
       }
 
       const saved = new Map<string, string>();
       for (const fc of action.changes) {
-        saved.set(
-          fc.fileName,
-          project.getFileContent(fc.fileName)
-        );
+        saved.set(fc.fileName, project.getFileContent(fc.fileName));
       }
       const errorsBefore = nonIsoErrorCount();
 
@@ -272,16 +253,11 @@ function fixFileValidated(
       let editsThisFix = 0;
       for (const fc of action.changes) {
         if (fc.textChanges.length === 0) continue;
-        const current = project.getFileContent(
-          fc.fileName
-        );
+        const current = project.getFileContent(fc.fileName);
         if (snapshots && !snapshots.has(fc.fileName)) {
           snapshots.set(fc.fileName, current);
         }
-        const updated = applyTextChanges(
-          current,
-          fc.textChanges
-        );
+        const updated = applyTextChanges(current, fc.textChanges);
         project.updateFile(fc.fileName, updated);
         editsThisFix += fc.textChanges.length;
         applied = true;
@@ -320,34 +296,27 @@ function runCoreFixes(ctx: FixContext): void {
     ctx.passes = pass;
     let changesThisPass = 0;
     let filesFixedThisPass = 0;
-    const program =
-      ctx.project.languageService.getProgram();
+    const program = ctx.project.languageService.getProgram();
     if (!program) {
-      throw new Error(
-        "Failed to get program from language service"
-      );
+      throw new Error("Failed to get program from language service");
     }
 
     const sourceFiles = program.getSourceFiles();
     for (const sourceFile of sourceFiles) {
-      if (
-        sourceFile.fileName.includes("node_modules")
-      )
-        continue;
+      if (sourceFile.fileName.includes("node_modules")) continue;
       if (sourceFile.isDeclarationFile) continue;
 
       let combinedFix: ts.CombinedCodeActions;
       try {
-        combinedFix =
-          ctx.project.languageService.getCombinedCodeFix(
-            {
-              type: "file",
-              fileName: sourceFile.fileName,
-            },
-            FIX_ID,
-            ctx.formatOptions,
-            ctx.preferences
-          );
+        combinedFix = ctx.project.languageService.getCombinedCodeFix(
+          {
+            type: "file",
+            fileName: sourceFile.fileName,
+          },
+          FIX_ID,
+          ctx.formatOptions,
+          ctx.preferences
+        );
       } catch (err) {
         let fallbackEdits = 0;
         try {
@@ -364,9 +333,7 @@ function runCoreFixes(ctx: FixContext): void {
 
         if (fallbackEdits > 0) {
           ctx.filesChanged.add(sourceFile.fileName);
-          ctx.filesSkipped.delete(
-            sourceFile.fileName
-          );
+          ctx.filesSkipped.delete(sourceFile.fileName);
           changesThisPass++;
           filesFixedThisPass++;
           ctx.onProgress?.({
@@ -374,17 +341,9 @@ function runCoreFixes(ctx: FixContext): void {
             fileName: sourceFile.fileName,
             edits: fallbackEdits,
           });
-        } else if (
-          !ctx.filesChanged.has(sourceFile.fileName)
-        ) {
-          const msg =
-            err instanceof Error
-              ? err.message
-              : String(err);
-          ctx.filesSkipped.set(
-            sourceFile.fileName,
-            msg
-          );
+        } else if (!ctx.filesChanged.has(sourceFile.fileName)) {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.filesSkipped.set(sourceFile.fileName, msg);
           ctx.onProgress?.({
             type: "file-error",
             fileName: sourceFile.fileName,
@@ -407,32 +366,18 @@ function runCoreFixes(ctx: FixContext): void {
       if (combinedFix.changes.length === 0) continue;
 
       if (ctx.verbose) {
-        console.log(
-          `  Pass ${pass}: ${sourceFile.fileName}`
-        );
+        console.log(`  Pass ${pass}: ${sourceFile.fileName}`);
       }
 
       let fileEdits = 0;
       for (const fileChange of combinedFix.changes) {
-        if (fileChange.textChanges.length === 0)
-          continue;
-        const current = ctx.project.getFileContent(
-          fileChange.fileName
-        );
+        if (fileChange.textChanges.length === 0) continue;
+        const current = ctx.project.getFileContent(fileChange.fileName);
         if (!ctx.snapshots.has(fileChange.fileName)) {
-          ctx.snapshots.set(
-            fileChange.fileName,
-            current
-          );
+          ctx.snapshots.set(fileChange.fileName, current);
         }
-        const newContent = applyTextChanges(
-          current,
-          fileChange.textChanges
-        );
-        ctx.project.updateFile(
-          fileChange.fileName,
-          newContent
-        );
+        const newContent = applyTextChanges(current, fileChange.textChanges);
+        ctx.project.updateFile(fileChange.fileName, newContent);
         ctx.filesChanged.add(fileChange.fileName);
         changesThisPass++;
         fileEdits += fileChange.textChanges.length;
@@ -459,12 +404,10 @@ function runCoreFixes(ctx: FixContext): void {
   // Final sweep: pick up fixes that
   // getCombinedCodeFix misses.
   let sweepFixed = 0;
-  const programSweep =
-    ctx.project.languageService.getProgram();
+  const programSweep = ctx.project.languageService.getProgram();
   if (programSweep) {
     for (const sf of programSweep.getSourceFiles()) {
-      if (sf.fileName.includes("node_modules"))
-        continue;
+      if (sf.fileName.includes("node_modules")) continue;
       if (sf.isDeclarationFile) continue;
 
       const edits = fixFileFallback(
@@ -503,8 +446,7 @@ function runCoreFixes(ctx: FixContext): void {
  * this — we inline the constant value ourselves.
  */
 function runEnumFixer(ctx: FixContext): void {
-  const programEnum =
-    ctx.project.languageService.getProgram();
+  const programEnum = ctx.project.languageService.getProgram();
   if (!programEnum) return;
 
   const checker = programEnum.getTypeChecker();
@@ -514,14 +456,10 @@ function runEnumFixer(ctx: FixContext): void {
 
     const diags = ctx.project.languageService
       .getSemanticDiagnostics(sf.fileName)
-      .filter(
-        (d) => d.code === 9020 && d.start !== undefined
-      );
+      .filter((d) => d.code === 9020 && d.start !== undefined);
     if (diags.length === 0) continue;
 
-    let content = ctx.project.getFileContent(
-      sf.fileName
-    );
+    let content = ctx.project.getFileContent(sf.fileName);
     if (!ctx.snapshots.has(sf.fileName)) {
       ctx.snapshots.set(sf.fileName, content);
     }
@@ -533,27 +471,20 @@ function runEnumFixer(ctx: FixContext): void {
     );
 
     let enumFixed = 0;
-    const sorted = [...diags].sort(
-      (a, b) => b.start! - a.start!
-    );
+    const sorted = [...diags].sort((a, b) => b.start! - a.start!);
     for (const d of sorted) {
       const pos = d.start!;
       const node = findEnumMemberAt(src, pos);
       if (!node) continue;
 
-      const progSf = programEnum.getSourceFile(
-        sf.fileName
-      );
+      const progSf = programEnum.getSourceFile(sf.fileName);
       if (!progSf) continue;
       const member = findEnumMemberAt(progSf, pos);
       if (!member) continue;
 
-      let val = checker.getConstantValue(
-        member as ts.EnumMember
-      );
+      let val = checker.getConstantValue(member as ts.EnumMember);
       if (val === undefined) {
-        const init2 = (member as ts.EnumMember)
-          .initializer;
+        const init2 = (member as ts.EnumMember).initializer;
         if (init2) {
           const t = checker.getTypeAtLocation(init2);
           if (t.isStringLiteral()) {
@@ -565,14 +496,11 @@ function runEnumFixer(ctx: FixContext): void {
       }
       if (val === undefined) continue;
 
-      const init = (member as ts.EnumMember)
-        .initializer;
+      const init = (member as ts.EnumMember).initializer;
       if (!init) continue;
 
       const replacement =
-        typeof val === "string"
-          ? JSON.stringify(val)
-          : String(val);
+        typeof val === "string" ? JSON.stringify(val) : String(val);
 
       content =
         content.slice(0, init.getStart(progSf)) +
@@ -630,29 +558,22 @@ function runEnumFixer(ctx: FixContext): void {
  * rollbacks of the built-in fix.
  */
 function runExpandoFixer(ctx: FixContext): void {
-  const program =
-    ctx.project.languageService.getProgram();
+  const program = ctx.project.languageService.getProgram();
   if (!program) return;
 
   const checker = program.getTypeChecker();
   const printer = ts.createPrinter();
 
   for (const sf of program.getSourceFiles()) {
-    if (sf.fileName.includes("node_modules"))
-      continue;
+    if (sf.fileName.includes("node_modules")) continue;
     if (sf.isDeclarationFile) continue;
 
     const diags = ctx.project.languageService
       .getSemanticDiagnostics(sf.fileName)
-      .filter(
-        (d) =>
-          d.code === 9023 && d.start !== undefined
-      );
+      .filter((d) => d.code === 9023 && d.start !== undefined);
     if (diags.length === 0) continue;
 
-    let content = ctx.project.getFileContent(
-      sf.fileName
-    );
+    let content = ctx.project.getFileContent(sf.fileName);
     if (!ctx.snapshots.has(sf.fileName)) {
       ctx.snapshots.set(sf.fileName, content);
     }
@@ -672,56 +593,35 @@ function runExpandoFixer(ctx: FixContext): void {
       stmtStart: number;
       stmtEnd: number;
     }
-    const groups = new Map<
-      string,
-      { props: PropInfo[]; funcEnd: number }
-    >();
+    const groups = new Map<string, { props: PropInfo[]; funcEnd: number }>();
 
     for (const d of diags) {
-      const assign = findExpandoAssignment(
-        src,
-        d.start!
-      );
+      const assign = findExpandoAssignment(src, d.start!);
       if (!assign) continue;
 
-      const progSf = program.getSourceFile(
-        sf.fileName
-      );
+      const progSf = program.getSourceFile(sf.fileName);
       if (!progSf) continue;
-      const progAssign = findExpandoAssignment(
-        progSf,
-        d.start!
-      );
+      const progAssign = findExpandoAssignment(progSf, d.start!);
       if (!progAssign) continue;
 
-      const rawType = checker.getTypeAtLocation(
-        progAssign.right
-      );
+      const rawType = checker.getTypeAtLocation(progAssign.right);
       // Widen literal types ("foo" → string,
       // 42 → number) to match what tsc emits.
-      const rightType =
-        checker.getBaseTypeOfLiteralType(rawType);
+      const rightType = checker.getBaseTypeOfLiteralType(rawType);
       const typeNode = checker.typeToTypeNode(
         rightType,
         progAssign.stmt,
         ts.NodeBuilderFlags.NoTruncation
       );
       const typeStr = typeNode
-        ? printer.printNode(
-            ts.EmitHint.Unspecified,
-            typeNode,
-            progSf
-          )
+        ? printer.printNode(ts.EmitHint.Unspecified, typeNode, progSf)
         : "unknown";
 
       const funcName = assign.funcName;
       if (!groups.has(funcName)) {
         // Namespace only merges with function
         // declarations (not const/let/var).
-        const funcDecl = findFunctionDecl(
-          src,
-          funcName
-        );
+        const funcDecl = findFunctionDecl(src, funcName);
         if (!funcDecl) continue;
         groups.set(funcName, {
           props: [],
@@ -760,13 +660,7 @@ function runExpandoFixer(ctx: FixContext): void {
         groups.has(stmt.name.text) &&
         // Only remove ambient (declare) namespaces
         // — never remove user-written namespaces.
-        !!(
-          stmt.modifiers?.some(
-            (m) =>
-              m.kind ===
-              ts.SyntaxKind.DeclareKeyword
-          )
-        )
+        !!stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.DeclareKeyword)
       ) {
         let delEnd = stmt.getEnd();
         if (content[delEnd] === "\n") delEnd++;
@@ -793,15 +687,10 @@ function runExpandoFixer(ctx: FixContext): void {
 
       const members = group.props
         .map(
-          (p) =>
-            `  export const ${p.prop}` +
-            `: ${p.typeStr} = ${p.initText};`
+          (p) => `  export const ${p.prop}` + `: ${p.typeStr} = ${p.initText};`
         )
         .join("\n");
-      const ns =
-        `\n\nexport namespace ${funcName} {\n` +
-        members +
-        "\n}\n";
+      const ns = `\n\nexport namespace ${funcName} {\n` + members + "\n}\n";
 
       // Insert namespace right after the function
       // declaration (TS2434: must come after).
@@ -815,9 +704,7 @@ function runExpandoFixer(ctx: FixContext): void {
     edits.sort((a, b) => b.start - a.start);
     for (const e of edits) {
       content =
-        content.slice(0, e.start) +
-        e.replacement +
-        content.slice(e.end);
+        content.slice(0, e.start) + e.replacement + content.slice(e.end);
     }
 
     if (expandoFixed > 0) {
@@ -840,10 +727,7 @@ function findFunctionDecl(
   name: string
 ): ts.FunctionDeclaration | undefined {
   for (const stmt of sf.statements) {
-    if (
-      ts.isFunctionDeclaration(stmt) &&
-      stmt.name?.text === name
-    ) {
+    if (ts.isFunctionDeclaration(stmt) && stmt.name?.text === name) {
       return stmt;
     }
   }
@@ -865,8 +749,7 @@ function findExpandoAssignment(
     const expr = stmt.expression;
     if (
       !ts.isBinaryExpression(expr) ||
-      expr.operatorToken.kind !==
-        ts.SyntaxKind.EqualsToken
+      expr.operatorToken.kind !== ts.SyntaxKind.EqualsToken
     )
       continue;
     const left = expr.left;
@@ -913,9 +796,7 @@ function findNodeCoveringSpan(
   length: number
 ): ts.Node | undefined {
   const end = start + length;
-  function visit(
-    node: ts.Node
-  ): ts.Node | undefined {
+  function visit(node: ts.Node): ts.Node | undefined {
     const ns = node.getStart(sf);
     const ne = node.getEnd();
     if (ns === start && ne === end) return node;
@@ -928,9 +809,7 @@ function findNodeCoveringSpan(
 }
 
 /** Get the root Identifier of a dotted chain. */
-function getRootIdentifier(
-  node: ts.Node
-): ts.Identifier | undefined {
+function getRootIdentifier(node: ts.Node): ts.Identifier | undefined {
   if (ts.isIdentifier(node)) return node;
   if (ts.isPropertyAccessExpression(node)) {
     return getRootIdentifier(node.expression);
@@ -944,10 +823,7 @@ function getRootIdentifier(
  * OXC rejects typeof references to binding elements
  * with TS9019 even when the variable isn't exported.
  */
-function refsBindingElement(
-  node: ts.Node,
-  checker: ts.TypeChecker
-): boolean {
+function refsBindingElement(node: ts.Node, checker: ts.TypeChecker): boolean {
   const root = getRootIdentifier(node);
   if (!root) return false;
   const sym = checker.getSymbolAtLocation(root);
@@ -977,15 +853,10 @@ const typeAsserPrinter = ts.createPrinter();
  * annotation, causing TS2842. Fix by replacing the
  * entire binding pattern with a plain identifier.
  */
-function sanitizeTypeNode(
-  typeNode: ts.TypeNode
-): ts.TypeNode {
+function sanitizeTypeNode(typeNode: ts.TypeNode): ts.TypeNode {
   const result = ts.transform(typeNode, [
     (context) => {
-      const visitor: ts.Visitor<
-        ts.Node,
-        ts.Node
-      > = (node) => {
+      const visitor: ts.Visitor<ts.Node, ts.Node> = (node) => {
         if (
           ts.isParameter(node) &&
           (ts.isObjectBindingPattern(node.name) ||
@@ -1000,17 +871,9 @@ function sanitizeTypeNode(
             node.initializer
           );
         }
-        return ts.visitEachChild(
-          node,
-          visitor,
-          context
-        );
+        return ts.visitEachChild(node, visitor, context);
       };
-      return (rootNode) =>
-        ts.visitNode(
-          rootNode,
-          visitor
-        ) as ts.TypeNode;
+      return (rootNode) => ts.visitNode(rootNode, visitor) as ts.TypeNode;
     },
   ]);
   const sanitized = result.transformed[0];
@@ -1018,9 +881,7 @@ function sanitizeTypeNode(
   return sanitized;
 }
 
-const EXPR_FIXER_CODES = new Set([
-  9010, 9013, 9017, 9037,
-]);
+const EXPR_FIXER_CODES = new Set([9010, 9013, 9017, 9037]);
 
 interface ExpressionFixResult {
   content: string;
@@ -1054,23 +915,15 @@ function serializeType(
   if (!typeNode) return null;
 
   const sanitized = sanitizeTypeNode(typeNode);
-  return typeAsserPrinter.printNode(
-    ts.EmitHint.Unspecified,
-    sanitized,
-    sf
-  );
+  return typeAsserPrinter.printNode(ts.EmitHint.Unspecified, sanitized, sf);
 }
 
 /** True for `||` or `??` binary expressions. */
-function isFallbackExpr(
-  node: ts.Node
-): node is ts.BinaryExpression {
+function isFallbackExpr(node: ts.Node): node is ts.BinaryExpression {
   return (
     ts.isBinaryExpression(node) &&
-    (node.operatorToken.kind ===
-      ts.SyntaxKind.BarBarToken ||
-      node.operatorToken.kind ===
-        ts.SyntaxKind.QuestionQuestionToken)
+    (node.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+      node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
   );
 }
 
@@ -1099,11 +952,7 @@ function computeExpressionFix(
 
   // TS9010: variable needs `: Type` annotation.
   if (d.code === 9010) {
-    const nameNode = findNodeCoveringSpan(
-      sf,
-      pos,
-      d.length ?? 0
-    );
+    const nameNode = findNodeCoveringSpan(sf, pos, d.length ?? 0);
     if (!nameNode) return null;
     const varDecl = nameNode.parent;
     if (
@@ -1113,18 +962,11 @@ function computeExpressionFix(
     )
       return null;
 
-    const typeText = serializeType(
-      checker,
-      varDecl.initializer,
-      sf
-    );
+    const typeText = serializeType(checker, varDecl.initializer, sf);
     if (!typeText) return null;
 
     return {
-      content:
-        content.slice(0, end) +
-        `: ${typeText}` +
-        content.slice(end),
+      content: content.slice(0, end) + `: ${typeText}` + content.slice(end),
       safe: false,
     };
   }
@@ -1134,11 +976,7 @@ function computeExpressionFix(
   // producing `readonly` tuple types that break assignments where
   // a mutable `string[]` (or similar) is expected.
   if (d.code === 9017) {
-    const node = findNodeCoveringSpan(
-      sf,
-      pos,
-      d.length ?? 0
-    );
+    const node = findNodeCoveringSpan(sf, pos, d.length ?? 0);
     if (node) {
       const typeText = serializeType(checker, node, sf);
       if (typeText) {
@@ -1153,32 +991,20 @@ function computeExpressionFix(
     }
     // Fallback: `as const` (may produce a readonly tuple type).
     return {
-      content:
-        content.slice(0, end) +
-        " as const" +
-        content.slice(end),
+      content: content.slice(0, end) + " as const" + content.slice(end),
       safe: true,
     };
   }
 
   // TS9013 / TS9037: expression needs type.
-  const node = findNodeCoveringSpan(
-    sf,
-    pos,
-    d.length ?? 0
-  );
+  const node = findNodeCoveringSpan(sf, pos, d.length ?? 0);
   if (!node) return null;
 
   // Identifier or A.B.C → `as typeof expr`.
-  if (
-    isTypeofTarget(node) &&
-    !refsBindingElement(node, checker)
-  ) {
+  if (isTypeofTarget(node) && !refsBindingElement(node, checker)) {
     return {
       content:
-        content.slice(0, end) +
-        ` as typeof ${exprText}` +
-        content.slice(end),
+        content.slice(0, end) + ` as typeof ${exprText}` + content.slice(end),
       safe: true,
     };
   }
@@ -1216,23 +1042,14 @@ function computeExpressionFix(
 // ── Expression fixer helpers ─────────────────────
 
 /** Count non-iso errors in a file. */
-function nonIsoErrorCount(
-  ctx: FixContext,
-  fileName: string
-): number {
+function nonIsoErrorCount(ctx: FixContext, fileName: string): number {
   return ctx.project.languageService
     .getSemanticDiagnostics(fileName)
-    .filter(
-      (d) => !isIsolatedDeclarationsError(d.code)
-    ).length;
+    .filter((d) => !isIsolatedDeclarationsError(d.code)).length;
 }
 
 /** Record a file as changed by the expression fixer. */
-function recordExprFix(
-  ctx: FixContext,
-  fileName: string,
-  edits: number
-): void {
+function recordExprFix(ctx: FixContext, fileName: string, edits: number): void {
   ctx.filesChanged.add(fileName);
   ctx.filesSkipped.delete(fileName);
   ctx.totalChanges += edits;
@@ -1248,16 +1065,12 @@ function recordExprFix(
  * time, keeping only those that don't introduce
  * non-iso errors.
  */
-function fixExpressionValidated(
-  ctx: FixContext,
-  fileName: string
-): number {
+function fixExpressionValidated(ctx: FixContext, fileName: string): number {
   let totalFixed = 0;
   let prevCount = -1;
 
   for (let round = 0; round < 50; round++) {
-    const prog =
-      ctx.project.languageService.getProgram();
+    const prog = ctx.project.languageService.getProgram();
     if (!prog) break;
     const chk = prog.getTypeChecker();
     const curSf = prog.getSourceFile(fileName);
@@ -1265,11 +1078,7 @@ function fixExpressionValidated(
 
     const diags = ctx.project.languageService
       .getSemanticDiagnostics(fileName)
-      .filter(
-        (d) =>
-          EXPR_FIXER_CODES.has(d.code) &&
-          d.start !== undefined
-      );
+      .filter((d) => EXPR_FIXER_CODES.has(d.code) && d.start !== undefined);
 
     if (diags.length === 0) break;
     if (diags.length === prevCount) break;
@@ -1277,28 +1086,15 @@ function fixExpressionValidated(
 
     let fixedAny = false;
     for (const d of diags) {
-      const content =
-        ctx.project.getFileContent(fileName);
-      const errorsBefore = nonIsoErrorCount(
-        ctx,
-        fileName
-      );
+      const content = ctx.project.getFileContent(fileName);
+      const errorsBefore = nonIsoErrorCount(ctx, fileName);
 
-      const fix = computeExpressionFix(
-        curSf,
-        chk,
-        d,
-        content
-      );
+      const fix = computeExpressionFix(curSf, chk, d, content);
       if (!fix) continue;
 
       ctx.project.updateFile(fileName, fix.content);
 
-      if (
-        !fix.safe &&
-        nonIsoErrorCount(ctx, fileName) >
-          errorsBefore
-      ) {
+      if (!fix.safe && nonIsoErrorCount(ctx, fileName) > errorsBefore) {
         ctx.project.updateFile(fileName, content);
         continue;
       }
@@ -1325,48 +1121,30 @@ function fixExpressionValidated(
  * with unimported names).
  */
 function runExpressionFixer(ctx: FixContext): void {
-  const program =
-    ctx.project.languageService.getProgram();
+  const program = ctx.project.languageService.getProgram();
   if (!program) return;
   const checker = program.getTypeChecker();
 
   for (const sf of program.getSourceFiles()) {
-    if (sf.fileName.includes("node_modules"))
-      continue;
+    if (sf.fileName.includes("node_modules")) continue;
     if (sf.isDeclarationFile) continue;
 
     const diags = ctx.project.languageService
       .getSemanticDiagnostics(sf.fileName)
-      .filter(
-        (d) =>
-          EXPR_FIXER_CODES.has(d.code) &&
-          d.start !== undefined
-      );
+      .filter((d) => EXPR_FIXER_CODES.has(d.code) && d.start !== undefined);
     if (diags.length === 0) continue;
 
     if (!ctx.snapshots.has(sf.fileName)) {
-      ctx.snapshots.set(
-        sf.fileName,
-        ctx.project.getFileContent(sf.fileName)
-      );
+      ctx.snapshots.set(sf.fileName, ctx.project.getFileContent(sf.fileName));
     }
 
     // Batch: apply all fixes at once.
-    let content = ctx.project.getFileContent(
-      sf.fileName
-    );
+    let content = ctx.project.getFileContent(sf.fileName);
     let fixed = 0;
     let allSafe = true;
-    const sorted = [...diags].sort(
-      (a, b) => b.start! - a.start!
-    );
+    const sorted = [...diags].sort((a, b) => b.start! - a.start!);
     for (const d of sorted) {
-      const fix = computeExpressionFix(
-        sf,
-        checker,
-        d,
-        content
-      );
+      const fix = computeExpressionFix(sf, checker, d, content);
       if (fix) {
         content = fix.content;
         if (!fix.safe) allSafe = false;
@@ -1384,16 +1162,12 @@ function runExpressionFixer(ctx: FixContext): void {
     }
 
     // Unsafe batch: validate before applying.
-    const before = ctx.project.getFileContent(
-      sf.fileName
-    );
+    const before = ctx.project.getFileContent(sf.fileName);
     ctx.project.updateFile(sf.fileName, content);
     const after = nonIsoErrorCount(ctx, sf.fileName);
     ctx.project.updateFile(sf.fileName, before);
 
-    if (
-      after <= nonIsoErrorCount(ctx, sf.fileName)
-    ) {
+    if (after <= nonIsoErrorCount(ctx, sf.fileName)) {
       ctx.project.updateFile(sf.fileName, content);
       recordExprFix(ctx, sf.fileName, fixed);
       continue;
@@ -1401,19 +1175,14 @@ function runExpressionFixer(ctx: FixContext): void {
 
     // Batch introduced errors — keep only safe
     // individual fixes via per-fix validation.
-    const perFix = fixExpressionValidated(
-      ctx,
-      sf.fileName
-    );
+    const perFix = fixExpressionValidated(ctx, sf.fileName);
     if (perFix > 0) {
       recordExprFix(ctx, sf.fileName, perFix);
     } else {
       ctx.onProgress?.({
         type: "file-error",
         fileName: sf.fileName,
-        message:
-          "expression fixer: all fixes " +
-          "introduce errors",
+        message: "expression fixer: all fixes " + "introduce errors",
       });
     }
   }
@@ -1432,43 +1201,32 @@ function runValidation(ctx: FixContext): void {
 
     let errors = ctx.project.languageService
       .getSemanticDiagnostics(fileName)
-      .filter(
-        (d) => !isIsolatedDeclarationsError(d.code)
-      );
+      .filter((d) => !isIsolatedDeclarationsError(d.code));
     if (errors.length === 0) continue;
 
-    const fixedContent =
-      ctx.project.getFileContent(fileName);
+    const fixedContent = ctx.project.getFileContent(fileName);
     ctx.project.updateFile(fileName, original);
     const beforeCount = ctx.project.languageService
       .getSemanticDiagnostics(fileName)
-      .filter(
-        (d) => !isIsolatedDeclarationsError(d.code)
-      ).length;
+      .filter((d) => !isIsolatedDeclarationsError(d.code)).length;
     ctx.project.updateFile(fileName, fixedContent);
 
     if (errors.length <= beforeCount) continue;
 
     // Try organizeImports for import corruption.
     const hasImportIssues = errors.some(
-      (d) =>
-        d.code === 2300 ||
-        d.code === 2440 ||
-        d.code === 2395
+      (d) => d.code === 2300 || d.code === 2440 || d.code === 2395
     );
     if (hasImportIssues) {
       try {
-        const orgChanges =
-          ctx.project.languageService.organizeImports(
-            { type: "file", fileName },
-            ctx.formatOptions,
-            ctx.preferences
-          );
+        const orgChanges = ctx.project.languageService.organizeImports(
+          { type: "file", fileName },
+          ctx.formatOptions,
+          ctx.preferences
+        );
         for (const oc of orgChanges) {
           if (oc.textChanges.length === 0) continue;
-          const cur = ctx.project.getFileContent(
-            oc.fileName
-          );
+          const cur = ctx.project.getFileContent(oc.fileName);
           ctx.project.updateFile(
             oc.fileName,
             applyTextChanges(cur, oc.textChanges)
@@ -1476,10 +1234,7 @@ function runValidation(ctx: FixContext): void {
         }
         errors = ctx.project.languageService
           .getSemanticDiagnostics(fileName)
-          .filter(
-            (d) =>
-              !isIsolatedDeclarationsError(d.code)
-          );
+          .filter((d) => !isIsolatedDeclarationsError(d.code));
       } catch {
         // organizeImports failed
       }
@@ -1494,8 +1249,7 @@ function runValidation(ctx: FixContext): void {
     );
     if (hasBarePromise) {
       try {
-        const content =
-          ctx.project.getFileContent(fileName);
+        const content = ctx.project.getFileContent(fileName);
         const patched = content.replace(
           /(?<=:\s*)Promise\b(?!\s*<)/g,
           "Promise<void>"
@@ -1504,10 +1258,7 @@ function runValidation(ctx: FixContext): void {
           ctx.project.updateFile(fileName, patched);
           errors = ctx.project.languageService
             .getSemanticDiagnostics(fileName)
-            .filter(
-              (d) =>
-                !isIsolatedDeclarationsError(d.code)
-            );
+            .filter((d) => !isIsolatedDeclarationsError(d.code));
         }
       } catch {
         // repair failed
@@ -1568,19 +1319,15 @@ function runValidation(ctx: FixContext): void {
  */
 function buildResult(ctx: FixContext): FixResult {
   const remainingErrors = new Map<string, number>();
-  const programCheck =
-    ctx.project.languageService.getProgram();
+  const programCheck = ctx.project.languageService.getProgram();
   if (programCheck) {
     for (const sf of programCheck.getSourceFiles()) {
-      if (sf.fileName.includes("node_modules"))
-        continue;
+      if (sf.fileName.includes("node_modules")) continue;
       if (sf.isDeclarationFile) continue;
 
       const count = ctx.project.languageService
         .getSemanticDiagnostics(sf.fileName)
-        .filter((d) =>
-          isIsolatedDeclarationsError(d.code)
-        ).length;
+        .filter((d) => isIsolatedDeclarationsError(d.code)).length;
       if (count > 0) {
         remainingErrors.set(sf.fileName, count);
       }
@@ -1598,10 +1345,7 @@ function buildResult(ctx: FixContext): FixResult {
 
 // ── Public API ───────────────────────────────────────
 
-export function fix(
-  project: Project,
-  options: FixOptions = {}
-): FixResult {
+export function fix(project: Project, options: FixOptions = {}): FixResult {
   const {
     maxPasses = 5,
     verbose = false,
@@ -1613,6 +1357,7 @@ export function fix(
     genericAlias = true,
     stripInnerReturnTypes = true,
     banTypes = true,
+    jestMock = true,
     expandoFix = true,
     onProgress,
   } = options;
@@ -1630,6 +1375,7 @@ export function fix(
     genericAlias,
     stripInnerReturnTypes,
     banTypes,
+    jestMock,
     expandoFix,
     onProgress,
     filesChanged: new Set(),
@@ -1653,6 +1399,7 @@ export function fix(
     genericAliasTransform,
     stripInnerReturnTypesTransform,
     banTypesTransform,
+    jestMockTransform,
   ];
   const transformCtx: TransformContext = {
     project: ctx.project,
@@ -1672,13 +1419,10 @@ export function fix(
     genericAlias: ctx.genericAlias,
     stripInnerReturnTypes: ctx.stripInnerReturnTypes,
     banTypes: ctx.banTypes,
+    jestMock: ctx.jestMock,
     verbose: ctx.verbose,
   };
-  runTransformPipeline(
-    transforms,
-    transformCtx,
-    transformOptions
-  );
+  runTransformPipeline(transforms, transformCtx, transformOptions);
 
   runValidation(ctx);
 
@@ -1692,15 +1436,9 @@ export function fix(
   // types that typeToTypeNode() generates.
   const changesBefore = ctx.totalChanges;
   runExpressionFixer(ctx);
-  if (
-    ctx.rewriteInlineImports &&
-    ctx.totalChanges > changesBefore
-  ) {
+  if (ctx.rewriteInlineImports && ctx.totalChanges > changesBefore) {
     for (const fn of ctx.filesChanged) {
-      inlineImportsTransform.transformFile(
-        fn,
-        transformCtx
-      );
+      inlineImportsTransform.transformFile(fn, transformCtx);
     }
   }
 

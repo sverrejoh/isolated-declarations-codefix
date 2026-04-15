@@ -19,6 +19,7 @@ interface CliOptions {
   genericAlias: boolean;
   stripInnerReturnTypes: boolean;
   banTypes: boolean;
+  jestMock: boolean;
   expandoFix: boolean;
 }
 
@@ -38,6 +39,7 @@ function parseArgs(args: string[]): CliOptions {
     genericAlias: true,
     stripInnerReturnTypes: true,
     banTypes: true,
+    jestMock: true,
     expandoFix: true,
   };
 
@@ -70,6 +72,8 @@ function parseArgs(args: string[]): CliOptions {
       opts.stripInnerReturnTypes = false;
     } else if (arg === "--no-ban-types") {
       opts.banTypes = false;
+    } else if (arg === "--no-jest-mock") {
+      opts.jestMock = false;
     } else if (arg === "--no-expando-fix") {
       opts.expandoFix = false;
     } else if (arg === "--extract-threshold") {
@@ -110,6 +114,7 @@ Options:
   --no-strip-inner-return-types
                         Keep inner callback return types
   --no-ban-types        Keep {} type literals as-is
+  --no-jest-mock        Skip jest.fn() mock annotation
   --no-expando-fix      Skip TS9023 expando function fix
   --extract-threshold <n>
                         Extract inline types with more than
@@ -144,6 +149,7 @@ export function main(): void {
     genericAlias: opts.genericAlias,
     stripInnerReturnTypes: opts.stripInnerReturnTypes,
     banTypes: opts.banTypes,
+    jestMock: opts.jestMock,
     expandoFix: opts.expandoFix,
     onProgress: (e) => {
       if (e.type === "file-scanned") {

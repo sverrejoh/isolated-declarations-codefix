@@ -146,7 +146,7 @@ es-module-lexer@^1.7.0:
   resolved "https://registry.npmjs.org/es-module-lexer/-/es-module-lexer-1.7.0.tgz"
   integrity sha512-jEQoCwk8hyb2AZziIOLhDqpm5+2ww5uIE6lkO/6jcOCusfk6LhMHpXXfBLXTZ7Ydyt0j4VoUQv6uGNYbdW+kBA==
 
-esbuild@^0.27.0:
+esbuild@^0.27.0, esbuild@~0.27.0:
   version "0.27.4"
   resolved "https://registry.npmjs.org/esbuild/-/esbuild-0.27.4.tgz"
   integrity sha512-Rq4vbHnYkK5fws5NF7MYTU68FPRE1ajX7heQ/8QXXWqNgqqJ/GkmmyxIzUnf2Sr/bakf8l54716CcMGHYhMrrQ==
@@ -194,6 +194,13 @@ fdir@^6.5.0:
   version "6.5.0"
   resolved "https://registry.npmjs.org/fdir/-/fdir-6.5.0.tgz"
   integrity sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==
+
+get-tsconfig@^4.7.5:
+  version "4.13.7"
+  resolved "https://registry.npmjs.org/get-tsconfig/-/get-tsconfig-4.13.7.tgz"
+  integrity sha512-7tN6rFgBlMgpBML5j8typ92BKFi2sFQvIdpAqLA2beia5avZDrMs0FLZiM5etShWq5irVyGcGMEA1jcDaK7A/Q==
+  dependencies:
+    resolve-pkg-maps "^1.0.0"
 
 js-tokens@^9.0.1:
   version "9.0.1"
@@ -250,6 +257,11 @@ postcss@^8.5.6:
     nanoid "^3.3.11"
     picocolors "^1.1.1"
     source-map-js "^1.2.1"
+
+resolve-pkg-maps@^1.0.0:
+  version "1.0.0"
+  resolved "https://registry.npmjs.org/resolve-pkg-maps/-/resolve-pkg-maps-1.0.0.tgz"
+  integrity sha512-seS2Tj26TBVOC2NIc2rOe2y2ZO7efxITtLZcGSOnHHNOQ7CkiUBfw0Iw2ck6xkIhPwLhKNLS8BO+hEpngQlqzw==
 
 rollup@^4.43.0:
   version "4.59.0"
@@ -344,6 +356,16 @@ tinyspy@^4.0.3:
   version "4.0.4"
   resolved "https://registry.npmjs.org/tinyspy/-/tinyspy-4.0.4.tgz"
   integrity sha512-azl+t0z7pw/z958Gy9svOTuzqIk6xq+NSheJzn5MMWtWTFywIacg2wUlzKFGtt3cthx0r2SxMK0yzJOR0IES7Q==
+
+tsx@^4.21.0, tsx@^4.8.1:
+  version "4.21.0"
+  resolved "https://registry.npmjs.org/tsx/-/tsx-4.21.0.tgz"
+  integrity sha512-5C1sg4USs1lfG0GFb2RLXsdpXqBSEhAaA/0kPL01wxzpMqLILNxIxIOKiILz+cdg/pLnOUxFYOR5yhHU666wbw==
+  dependencies:
+    esbuild "~0.27.0"
+    get-tsconfig "^4.7.5"
+  optionalDependencies:
+    fsevents "~2.3.3"
 
 typescript@^5.8.0:
   version "5.9.3"

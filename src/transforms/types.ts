@@ -23,6 +23,7 @@ export interface TransformOptions {
   genericAlias: boolean;
   stripInnerReturnTypes: boolean;
   banTypes: boolean;
+  jestMock: boolean;
   verbose: boolean;
 }
 
@@ -30,10 +31,7 @@ export interface ReadabilityTransform {
   readonly name: string;
   readonly scope: TransformScope;
   isEnabled(options: TransformOptions): boolean;
-  transformFile(
-    fileName: string,
-    ctx: TransformContext
-  ): boolean;
+  transformFile(fileName: string, ctx: TransformContext): boolean;
   /** For batch transforms (e.g. cross-file dedup). */
   finalize?(ctx: TransformContext): void;
 }
