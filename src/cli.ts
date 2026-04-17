@@ -21,6 +21,7 @@ interface CliOptions {
   banTypes: boolean;
   jestMock: boolean;
   expandoFix: boolean;
+  timeoutSeconds: number;
 }
 
 function parseArgs(args: string[]): CliOptions {
@@ -41,6 +42,7 @@ function parseArgs(args: string[]): CliOptions {
     banTypes: true,
     jestMock: true,
     expandoFix: true,
+    timeoutSeconds: 0,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -78,6 +80,8 @@ function parseArgs(args: string[]): CliOptions {
       opts.expandoFix = false;
     } else if (arg === "--extract-threshold") {
       opts.extractThreshold = parseInt(args[++i], 10);
+    } else if (arg === "--timeout") {
+      opts.timeoutSeconds = parseInt(args[++i], 10);
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -119,6 +123,8 @@ Options:
   --extract-threshold <n>
                         Extract inline types with more than
                         n members to type aliases (default: 5)
+  --timeout <seconds>   Exit with code 124 after N seconds
+                         (0 = no timeout, default: 0)
   -h, --help            Show this help message
 `);
 }
@@ -127,6 +133,17 @@ export function main(): void {
   const args = process.argv.slice(2);
   const opts = parseArgs(args);
   const tsconfigPath = resolve(opts.project);
+
+  if (opts.timeoutSeconds > 0) {
+    const ms = opts.timeoutSeconds * 1000;
+    const timer = setTimeout(() => {
+      process.stderr.write(
+        `[timeout] Exceeded ${opts.timeoutSeconds}s limit — exiting with code 124. Retry to continue.\n`
+      );
+      process.exit(124);
+    }, ms);
+    timer.unref();
+  }
 
   const project = createProject(tsconfigPath);
 

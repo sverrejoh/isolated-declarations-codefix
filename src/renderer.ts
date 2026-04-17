@@ -239,20 +239,47 @@ export function createTtyRenderer(
 
 export function createPlainRenderer(rootDir: string): Renderer {
   let currentPass = 1;
+  let totalFiles = 0;
+  let scannedFiles = 0;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
   function rel(p: string): string {
     return relative(rootDir, p);
   }
 
-  return {
-    start(): void {},
+  function ts(): string {
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, "0");
+    const mm = String(now.getMinutes()).padStart(2, "0");
+    const ss = String(now.getSeconds()).padStart(2, "0");
+    return `[${hh}:${mm}:${ss}]`;
+  }
 
-    onFileScanned(): void {},
+  function startHeartbeat(): void {
+    heartbeatTimer = setInterval(() => {
+      process.stderr.write(
+        `${ts()} heartbeat: ${scannedFiles}/${totalFiles} files scanned, pass ${currentPass}\n`
+      );
+    }, 30_000);
+    // Don't keep the process alive just for heartbeats
+    heartbeatTimer.unref();
+  }
+
+  return {
+    start(n: number): void {
+      totalFiles = n;
+      console.log(`${ts()} Starting: ${n} files`);
+      startHeartbeat();
+    },
+
+    onFileScanned(): void {
+      scannedFiles++;
+    },
 
     onFileFixed(fileName: string, edits: number): void {
       const label = edits === 1 ? "edit" : "edits";
       console.log(
-        `Pass ${currentPass}: ${rel(fileName)}` + ` (${edits} ${label})`
+        `${ts()} Pass ${currentPass}: ${rel(fileName)} (${edits} ${label})`
       );
     },
 
@@ -260,29 +287,36 @@ export function createPlainRenderer(rootDir: string): Renderer {
       const short = message.includes("Changes overlap")
         ? "overlapping changes (TS bug)"
         : message.slice(0, 60);
-      console.log(`SKIP ${rel(fileName)}: ${short}`);
+      console.log(`${ts()} SKIP ${rel(fileName)}: ${short}`);
     },
 
-    onPassComplete(pass: number): void {
+    onPassComplete(pass: number, filesFixed: number): void {
+      console.log(`${ts()} Pass ${pass} complete: ${filesFixed} files fixed`);
       currentPass = pass + 1;
+      scannedFiles = 0;
     },
 
-    finish(result: FixResult): void {
+    finish(result: FixResult, elapsed: number): void {
+      if (heartbeatTimer !== undefined) {
+        clearInterval(heartbeatTimer);
+      }
+      const secs = (elapsed / 1000).toFixed(1);
       const ns = result.filesSkipped.size;
       const totalRemaining = [...result.remainingErrors.values()].reduce(
         (a, b) => a + b,
         0
       );
       if (result.totalChanges === 0 && ns === 0 && totalRemaining === 0) {
-        console.log("No isolated declarations fixes needed.");
+        console.log(`${ts()} No isolated declarations fixes needed.`);
       } else {
         const nf = result.filesChanged.size;
         const np = result.passes;
         let line =
-          `${nf}` +
+          `${ts()} ${nf}` +
           ` file${nf !== 1 ? "s" : ""}` +
           ` fixed in ${np}` +
-          ` pass${np !== 1 ? "es" : ""}.`;
+          ` pass${np !== 1 ? "es" : ""}` +
+          ` (${secs}s).`;
         if (ns > 0) {
           line += ` ${ns} skipped.`;
         }
@@ -291,7 +325,7 @@ export function createPlainRenderer(rootDir: string): Renderer {
       if (totalRemaining > 0) {
         const nr = result.remainingErrors.size;
         console.log(
-          `${totalRemaining} errors remaining` +
+          `${ts()} ${totalRemaining} errors remaining` +
             ` in ${nr}` +
             ` file${nr !== 1 ? "s" : ""}` +
             ` (no auto-fix available):`
