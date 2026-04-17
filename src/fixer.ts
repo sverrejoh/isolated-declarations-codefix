@@ -65,6 +65,13 @@ export interface FixOptions {
   banTypes?: boolean;
   jestMock?: boolean;
   expandoFix?: boolean;
+  /** Skip the validation rollback phase. Faster for large packages where
+   *  fixes are unlikely to introduce new non-isolated-declarations errors. */
+  skipValidation?: boolean;
+  /** Run only the core fix passes (Pass 1 + enum) and skip all post-processing
+   *  (transforms, validation, expando, expression fixer, buildResult scan).
+   *  Fastest mode — use for large packages where post-processing is too slow. */
+  coreOnly?: boolean;
   onProgress?: (event: ProgressEvent) => void;
 }
 
@@ -84,6 +91,8 @@ interface FixContext {
   banTypes: boolean;
   jestMock: boolean;
   expandoFix: boolean;
+  skipValidation: boolean;
+  coreOnly: boolean;
   onProgress?: (event: ProgressEvent) => void;
   filesChanged: Set<string>;
   filesSkipped: Map<string, string>;
@@ -401,14 +410,20 @@ function runCoreFixes(ctx: FixContext): void {
     ctx.totalChanges += changesThisPass;
   }
 
-  // Final sweep: pick up fixes that
-  // getCombinedCodeFix misses.
+  // Final sweep: pick up fixes that getCombinedCodeFix misses.
+  // Only check files that were skipped by the main pass — files already
+  // in filesChanged are fixed, and files with no diagnostics don't need
+  // the fallback. Scanning all source files is too expensive for large pkgs.
+  // Skip entirely in --core-only mode.
+  if (ctx.coreOnly) return;
   let sweepFixed = 0;
   const programSweep = ctx.project.languageService.getProgram();
   if (programSweep) {
+    const sweepCandidates = new Set(ctx.filesSkipped.keys());
     for (const sf of programSweep.getSourceFiles()) {
       if (sf.fileName.includes("node_modules")) continue;
       if (sf.isDeclarationFile) continue;
+      if (!sweepCandidates.has(sf.fileName)) continue;
 
       const edits = fixFileFallback(
         ctx.project,
@@ -450,9 +465,12 @@ function runEnumFixer(ctx: FixContext): void {
   if (!programEnum) return;
 
   const checker = programEnum.getTypeChecker();
+  // Only scan changed files — avoid full-project diagnostic scan.
+  const enumFilesToScan = new Set(ctx.filesChanged);
   for (const sf of programEnum.getSourceFiles()) {
     if (sf.fileName.includes("node_modules")) continue;
     if (sf.isDeclarationFile) continue;
+    if (!enumFilesToScan.has(sf.fileName)) continue;
 
     const diags = ctx.project.languageService
       .getSemanticDiagnostics(sf.fileName)
@@ -564,9 +582,12 @@ function runExpandoFixer(ctx: FixContext): void {
   const checker = program.getTypeChecker();
   const printer = ts.createPrinter();
 
+  // Only scan files we changed — avoid full-project diagnostic scan.
+  const filesToScan = new Set(ctx.filesChanged);
   for (const sf of program.getSourceFiles()) {
     if (sf.fileName.includes("node_modules")) continue;
     if (sf.isDeclarationFile) continue;
+    if (!filesToScan.has(sf.fileName)) continue;
 
     const diags = ctx.project.languageService
       .getSemanticDiagnostics(sf.fileName)
@@ -1125,9 +1146,14 @@ function runExpressionFixer(ctx: FixContext): void {
   if (!program) return;
   const checker = program.getTypeChecker();
 
+  // Only scan files we already changed — scanning all source files calls
+  // getSemanticDiagnostics on every file in the project, which is a
+  // full type-check that can take hours on large packages.
+  const filesToScan = new Set(ctx.filesChanged);
   for (const sf of program.getSourceFiles()) {
     if (sf.fileName.includes("node_modules")) continue;
     if (sf.isDeclarationFile) continue;
+    if (!filesToScan.has(sf.fileName)) continue;
 
     const diags = ctx.project.languageService
       .getSemanticDiagnostics(sf.fileName)
@@ -1195,6 +1221,7 @@ function runExpressionFixer(ctx: FixContext): void {
  * per-diagnostic retry.
  */
 function runValidation(ctx: FixContext): void {
+  if (ctx.skipValidation) return;
   for (const fileName of [...ctx.filesChanged]) {
     const original = ctx.snapshots.get(fileName);
     if (original === undefined) continue;
@@ -1319,18 +1346,21 @@ function runValidation(ctx: FixContext): void {
  */
 function buildResult(ctx: FixContext): FixResult {
   const remainingErrors = new Map<string, number>();
-  const programCheck = ctx.project.languageService.getProgram();
-  if (programCheck) {
-    for (const sf of programCheck.getSourceFiles()) {
-      if (sf.fileName.includes("node_modules")) continue;
-      if (sf.isDeclarationFile) continue;
-
-      const count = ctx.project.languageService
-        .getSemanticDiagnostics(sf.fileName)
-        .filter((d) => isIsolatedDeclarationsError(d.code)).length;
-      if (count > 0) {
-        remainingErrors.set(sf.fileName, count);
-      }
+  // Only check files we touched (changed or skipped) — not the entire
+  // project. Scanning all source files via getSemanticDiagnostics is a
+  // full-project type-check that can take hours on large packages and
+  // often crashes with OOM before writing any results to disk.
+  const filesToCheck = new Set([
+    ...ctx.filesChanged,
+    ...ctx.filesSkipped.keys(),
+  ]);
+  for (const fileName of filesToCheck) {
+    if (fileName.includes("node_modules")) continue;
+    const count = ctx.project.languageService
+      .getSemanticDiagnostics(fileName)
+      .filter((d) => isIsolatedDeclarationsError(d.code)).length;
+    if (count > 0) {
+      remainingErrors.set(fileName, count);
     }
   }
 
@@ -1359,6 +1389,8 @@ export function fix(project: Project, options: FixOptions = {}): FixResult {
     banTypes = true,
     jestMock = true,
     expandoFix = true,
+    skipValidation = false,
+    coreOnly = false,
     onProgress,
   } = options;
 
@@ -1377,6 +1409,8 @@ export function fix(project: Project, options: FixOptions = {}): FixResult {
     banTypes,
     jestMock,
     expandoFix,
+    skipValidation,
+    coreOnly,
     onProgress,
     filesChanged: new Set(),
     filesSkipped: new Map(),
@@ -1388,6 +1422,19 @@ export function fix(project: Project, options: FixOptions = {}): FixResult {
   };
 
   runCoreFixes(ctx);
+
+  // --core-only: skip all post-processing (transforms, validation, expando,
+  // expression fixer, buildResult scan). Just write what Pass 1 found.
+  if (ctx.coreOnly) {
+    return {
+      totalChanges: ctx.totalChanges,
+      filesChanged: ctx.filesChanged,
+      filesSkipped: ctx.filesSkipped,
+      remainingErrors: new Map(),
+      passes: ctx.passes,
+    };
+  }
+
   runEnumFixer(ctx);
 
   const transforms: ReadabilityTransform[] = [

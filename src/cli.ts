@@ -22,6 +22,8 @@ interface CliOptions {
   jestMock: boolean;
   expandoFix: boolean;
   timeoutSeconds: number;
+  skipValidation: boolean;
+  coreOnly: boolean;
 }
 
 function parseArgs(args: string[]): CliOptions {
@@ -43,6 +45,8 @@ function parseArgs(args: string[]): CliOptions {
     jestMock: true,
     expandoFix: true,
     timeoutSeconds: 0,
+    skipValidation: false,
+    coreOnly: false,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -78,6 +82,11 @@ function parseArgs(args: string[]): CliOptions {
       opts.jestMock = false;
     } else if (arg === "--no-expando-fix") {
       opts.expandoFix = false;
+    } else if (arg === "--no-validation") {
+      opts.skipValidation = true;
+    } else if (arg === "--core-only") {
+      opts.coreOnly = true;
+      opts.skipValidation = true;
     } else if (arg === "--extract-threshold") {
       opts.extractThreshold = parseInt(args[++i], 10);
     } else if (arg === "--timeout") {
@@ -168,6 +177,8 @@ export function main(): void {
     banTypes: opts.banTypes,
     jestMock: opts.jestMock,
     expandoFix: opts.expandoFix,
+    skipValidation: opts.skipValidation,
+    coreOnly: opts.coreOnly,
     onProgress: (e) => {
       if (e.type === "file-scanned") {
         renderer.onFileScanned(e.fileName);
